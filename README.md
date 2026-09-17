@@ -1,10 +1,12 @@
-# WebMCP Dev
+# WebMCP Dev: Add WebMCP to websites, starting with Reddit
 
 [![CI](https://github.com/nickroci/webmcp-dev/actions/workflows/ci.yml/badge.svg)](https://github.com/nickroci/webmcp-dev/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Typed tools for AI agents, in the browser tabs you already use.**
+**A Chrome extension that adds WebMCP to websites that don't natively support it.**
 
-One developer extension, with portable site plugins. Install it once: enabled plugins automatically load on matching websites. Reddit is the first included plugin. A bundled local MCP server lets agents use those tools in your existing Chrome tabs.
+WebMCP Dev injects tools through site plugins. The included Reddit plugin lets agents browse subreddits, list and read posts, and publish posts using your existing signed-in tab. Add plugins to support other websites through the same extension.
+
+A bundled local MCP server connects agents such as Codex and Claude Code to the tabs you choose to share. Navigation tools change the visible page, so you and your agent can work in the same browser tab.
 
 Each plugin owns its tools and schemas. There is no central list of allowed tool types, site-specific popup, or switch statement to extend. The popup discovers tools at runtime and builds their input controls.
 
@@ -62,7 +64,7 @@ If the popup reports an outdated or missing background worker, use its **Reload 
 
 See [local connection details, manual config, and troubleshooting](docs/local-mcp.md).
 
-## Included tools
+## WebMCP for Reddit
 
 | Reddit tool | Behavior |
 | --- | --- |

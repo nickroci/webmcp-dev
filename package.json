@@ -3,7 +3,7 @@
   "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "Typed tools for local AI agents in your existing browser tabs, with plugins for each site.",
+  "description": "A Chrome extension that adds WebMCP to websites without native support. Includes WebMCP for Reddit, site plugins, and a local MCP server for AI agents.",
   "exports": {
     ".": {
       "types": "./dist/types/index.d.ts",
