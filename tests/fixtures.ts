@@ -21,7 +21,15 @@ export const submitted = { json: { errors: [], data: { id: 'xyz789', name: 't3_x
 export const replied = (parent_id = 't3_abc123') => ({ json: { errors: [], data: { things: [{ kind: 't1', data: {
   id: 'reply123', name: 't1_reply123', parent_id, link_id: 't3_abc123', author: 'fixture_user', body: 'Fixture reply',
 } }] } } });
+// What /api/comment actually returns: `id` is a fullname and the target is `parent`.
+export const repliedFullname = (parent = 't3_abc123') => ({ json: { errors: [], data: { things: [{ kind: 't1', data: {
+  id: 't1_reply123', name: 't1_reply123', parent, link_id: 't3_abc123', author: 'fixture_user', contentText: 'Fixture reply',
+} }] } } });
 export function memoryStorage() {
   const data = new Map<string, string>();
   return { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); }, removeItem: (key: string) => { data.delete(key); } };
 }
+// /api/info.json listing for one thing, used by the delete guard.
+export const info = (name = 't1_reply123', author = 'fixture_user') => ({
+  kind: 'Listing', data: { children: [{ kind: name.startsWith('t3_') ? 't3' : 't1', data: { name, id: name.slice(3), author } }] },
+});

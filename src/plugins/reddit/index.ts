@@ -1,6 +1,6 @@
 import manifest from './plugin.json';
 import { RedditClient } from './client';
-import { browseSchema, listSchema, readSchema, createSchema, replySchema, subredditPath, normalizePost } from './schemas';
+import { browseSchema, listSchema, readSchema, createSchema, replySchema, deleteSchema, subredditPath, normalizePost } from './schemas';
 import { definePlugin, defineTool } from '../../sdk';
 
 export const plugin = definePlugin({
@@ -58,6 +58,12 @@ export const plugin = definePlugin({
         description: 'Immediately publish a Markdown reply as the signed-in Reddit user. Supply the intended post fullname (t3_...) or comment fullname (t1_...) from list_posts or read_post. Use only the user’s intended target and reply text. Reuse request_id with identical inputs on retries; never automatically retry an uncertain submission. Returns the comment ID and a URL when available. Refresh the visible thread after success to show the reply.',
         annotations: { readOnlyHint: false, consequentialHint: true, untrustedContentHint: true },
         execute: (input, { signal }) => client.reply(input, signal),
+      }),
+      defineTool({
+        name: 'reddit_delete', title: 'Delete your post or comment', buttonLabel: 'Delete', schema: deleteSchema,
+        description: 'Permanently delete one of the signed-in user\u2019s own posts (t3_...) or comments (t1_...). Refuses anything written by another account. Requires confirm: true. Deletion cannot be undone, so use it only on a thing the user named. Unlike posting, it is idempotent and safe to repeat; the result reports whether removal was verified.',
+        annotations: { readOnlyHint: false, consequentialHint: true, untrustedContentHint: false },
+        execute: (input, { signal }) => client.deleteThing(input, signal),
       }),
     ] };
   },

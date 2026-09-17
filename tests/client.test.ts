@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RedditClient } from '../src/plugins/reddit/client';
-import { browseSchema, listSchema, readSchema, createSchema, replySchema, normalizeSubreddit, normalizePost, subredditPath } from '../src/plugins/reddit/schemas';
-import { listing, thread, me, submitted, replied, memoryStorage } from './fixtures';
+import { browseSchema, listSchema, readSchema, createSchema, replySchema, deleteSchema, normalizeSubreddit, normalizePost, subredditPath } from '../src/plugins/reddit/schemas';
+import { listing, thread, me, submitted, replied, repliedFullname, info, memoryStorage } from './fixtures';
 
 function harness(responses: Array<unknown | Response | Error>, storage = memoryStorage()) {
   const requests: Array<{ url: URL; init: RequestInit }> = [];
@@ -155,6 +155,52 @@ test('uncertain submissions are never retried, including after page reload', asy
     await assert.rejects(harness([], storage).client.createPost(textPost()), { code: 'SUBMISSION_UNCERTAIN' });
     assert.equal(requests.length, 2);
   }
+});
+
+test('confirms a reply when Reddit returns a fullname id and a parent field', async () => {
+  // Regression: /api/comment uses `id: t1_…` and `parent`, which previously read as SUBMISSION_UNCERTAIN.
+  for (const parent of ['t3_abc123', 't1_c1']) {
+    const { client } = harness([me, repliedFullname(parent)]);
+    const result = await client.reply(replyInput({ parent_id: parent.toUpperCase() }));
+    assert.deepEqual(result, {
+      id: 'reply123', fullname: 't1_reply123', parent_id: parent,
+      url: 'https://www.reddit.com/comments/abc123/_/reply123/', author: 'fixture_user', reused: false,
+    });
+  }
+});
+
+const deleteInput = (overrides = {}) => deleteSchema.parse({ thing_id: 't1_reply123', confirm: true, ...overrides });
+
+test('deletes the signed-in user\u2019s own comment and verifies removal', async () => {
+  const { client, requests } = harness([me, info('t1_reply123', me.data.name), {}, info('t1_reply123', '[deleted]')]);
+  const result = await client.deleteThing(deleteInput());
+  assert.deepEqual(requests.map(request => request.url.pathname), ['/api/me.json', '/api/info.json', '/api/del', '/api/info.json']);
+  const del = requests[2];
+  assert.equal(del.init.method, 'POST');
+  assert.equal((del.init.headers as Record<string, string>)['X-Modhash'], me.data.modhash);
+  assert.equal(new URLSearchParams(String(del.init.body)).get('id'), 't1_reply123');
+  assert.deepEqual(result, { thing_id: 't1_reply123', kind: 'comment', author: me.data.name, deleted: true, verified: true });
+});
+
+test('reports an unverified delete instead of claiming removal', async () => {
+  const { client } = harness([me, info('t3_abc123', me.data.name), {}, info('t3_abc123', me.data.name)]);
+  const result = await client.deleteThing(deleteInput({ thing_id: 't3_abc123' })) as { kind: string; verified: boolean };
+  assert.equal(result.kind, 'post');
+  assert.equal(result.verified, false);
+});
+
+test('refuses to delete without confirmation, another user\u2019s thing, or a missing thing', async () => {
+  const unconfirmed = harness([]);
+  await assert.rejects(unconfirmed.client.deleteThing(deleteInput({ confirm: false })), { code: 'CONFIRMATION_REQUIRED' });
+  assert.equal(unconfirmed.requests.length, 0, 'must not call Reddit before confirmation');
+
+  const foreign = harness([me, info('t1_reply123', 'someone_else')]);
+  await assert.rejects(foreign.client.deleteThing(deleteInput()), { code: 'NOT_AUTHOR' });
+  assert.ok(!foreign.requests.some(request => request.url.pathname === '/api/del'), 'must not delete another user\u2019s comment');
+
+  const missing = harness([me, { kind: 'Listing', data: { children: [] } }]);
+  await assert.rejects(missing.client.deleteThing(deleteInput()), { code: 'NOT_FOUND' });
+  assert.ok(!missing.requests.some(request => request.url.pathname === '/api/del'));
 });
 
 test('refuses to submit when persistence is unavailable', async () => {

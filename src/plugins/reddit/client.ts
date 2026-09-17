@@ -1,5 +1,5 @@
 import { ToolError as RedditError } from '../../errors';
-import { normalizePost, normalizeSubreddit, normalizedSort, redditHosts, replySchema, type CreateInput, type ListInput, type ReadInput, type ReplyInput } from './schemas';
+import { deleteSchema, normalizePost, normalizeSubreddit, normalizedSort, redditHosts, replySchema, type CreateInput, type DeleteInput, type ListInput, type ReadInput, type ReplyInput } from './schemas';
 
 type Json = Record<string, any>;
 export interface ClientOptions {
@@ -123,6 +123,37 @@ export class RedditClient {
     return this.trackSubmission(`reddit-webmcp:reply:${input.request_id}`, normalized, () => this.submitReply(normalized, signal), signal);
   }
 
+  async deleteThing(input: DeleteInput, signal?: AbortSignal) {
+    const parsed = deleteSchema.safeParse(input);
+    if (!parsed.success) throw new RedditError('INVALID_INPUT', 'Supply a t3_ post or t1_ comment fullname that you authored.');
+    if (!parsed.data.confirm) throw new RedditError('CONFIRMATION_REQUIRED', 'Set confirm to true. Deleting a post or comment is permanent and cannot be undone.');
+    const thingId = parsed.data.thing_id.toLowerCase();
+    const me = await this.request('/api/me.json', {}, signal);
+    if (!me.data?.name) throw new RedditError('LOGIN_REQUIRED', 'Sign in to Reddit in this tab before deleting.');
+    if (!me.data.modhash) throw new RedditError('SESSION_UNSUPPORTED', 'Reddit did not expose a CSRF modhash for this session. Try the extension on old.reddit.com while signed in.');
+    // Reddit silently ignores a delete on someone else's thing, so confirm authorship rather than
+    // reporting a success that never happened.
+    const before = listing(await this.request(`/api/info.json?id=${encodeURIComponent(thingId)}`, {}, signal))
+      .find(item => item.data?.name === thingId);
+    if (!before) throw new RedditError('NOT_FOUND', 'No post or comment with that fullname is visible from this tab.');
+    if (before.data.author !== me.data.name) {
+      throw new RedditError('NOT_AUTHOR', `This ${before.kind === 't3' ? 'post' : 'comment'} was written by u/${before.data.author}, not by the signed-in user u/${me.data.name}.`);
+    }
+    if (signal?.aborted) throw new RedditError('ABORTED', 'Cancelled before deletion.');
+    await this.request('/api/del', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Modhash': me.data.modhash },
+      body: new URLSearchParams({ id: thingId }).toString(),
+    }, signal);
+    // Deletion is idempotent, so an unverified result is safe to re-run; report it rather than guess.
+    let verified = false;
+    try {
+      const after = listing(await this.request(`/api/info.json?id=${encodeURIComponent(thingId)}`, {}, signal))
+        .find(item => item.data?.name === thingId);
+      verified = !after || after.data.author === '[deleted]';
+    } catch { verified = false; }
+    return { thing_id: thingId, kind: before.kind === 't3' ? 'post' : 'comment', author: me.data.name, deleted: true, verified };
+  }
+
   private async trackSubmission(key: string, input: unknown, submit: () => Promise<Record<string, unknown>>, signal?: AbortSignal): Promise<unknown> {
     // Only the fingerprint and outcome persist; bodies and CSRF tokens are never stored.
     const fingerprint = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(input)))))
@@ -171,8 +202,14 @@ export class RedditClient {
     }
     const things = response.json?.data?.things;
     const data = Array.isArray(things) ? things.find(item => item?.kind === 't1')?.data : undefined;
-    const id = data?.id ?? (typeof data?.name === 'string' ? data.name.replace(/^t1_/, '') : undefined);
-    if (typeof id !== 'string' || !/^[a-z0-9]{1,16}$/.test(id) || (data.name && data.name !== `t1_${id}`) || (data.parent_id && data.parent_id !== input.parent_id)) {
+    // /api/comment returns `id` as a fullname and names the target `parent`, while listing
+    // data uses a bare `id` and `parent_id`. Accept either, or a confirmed reply reads as lost.
+    const bare = (value: unknown) => (typeof value === 'string' ? value.replace(/^t1_/, '') : undefined);
+    const id = bare(data?.id) ?? bare(data?.name);
+    const named = bare(data?.name);
+    const parent = typeof data?.parent_id === 'string' ? data.parent_id
+      : typeof data?.parent === 'string' ? data.parent : undefined;
+    if (typeof id !== 'string' || !/^[a-z0-9]{1,16}$/.test(id) || (named && named !== id) || (parent && parent.toLowerCase() !== input.parent_id)) {
       throw new RedditError('SUBMISSION_UNCERTAIN', 'Reddit did not return a confirmed comment ID for this reply. Check the thread or your profile before retrying.');
     }
     // Construct a permalink from the confirmed IDs; never persist the reply body.

@@ -35,11 +35,17 @@ export const replySchema = z.strictObject({
   request_id: createSchema.shape.request_id.describe('Unique ID per intended reply. Reuse with identical parent and text on retries to prevent duplicate submission in this tab/origin.').meta({ 'x-generate': 'uuid' }),
 });
 
+export const deleteSchema = z.strictObject({
+  thing_id: z.string().regex(/^t[13]_[a-z0-9]{1,16}$/i).describe('Fullname of your own post (t3_...) or comment (t1_...), from list_posts, read_post, create_post, or reply. Bare IDs are not accepted.'),
+  confirm: z.boolean().default(false).describe('Must be true. Deletion is permanent and cannot be undone.'),
+});
+
 export type BrowseInput = z.infer<typeof browseSchema>;
 export type ListInput = z.infer<typeof listSchema>;
 export type ReadInput = z.infer<typeof readSchema>;
 export type CreateInput = z.infer<typeof createSchema>;
 export type ReplyInput = z.infer<typeof replySchema>;
+export type DeleteInput = z.infer<typeof deleteSchema>;
 
 function redditURL(value: string): URL {
   let url: URL;
