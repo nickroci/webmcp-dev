@@ -18,6 +18,9 @@ export const thread = [
 ];
 export const me = { kind: 't2', data: { name: 'fixture_user', modhash: 'test-modhash-do-not-expose' } };
 export const submitted = { json: { errors: [], data: { id: 'xyz789', name: 't3_xyz789', url: 'https://www.reddit.com/r/test/comments/xyz789/' } } };
+export const replied = (parent_id = 't3_abc123') => ({ json: { errors: [], data: { things: [{ kind: 't1', data: {
+  id: 'reply123', name: 't1_reply123', parent_id, link_id: 't3_abc123', author: 'fixture_user', body: 'Fixture reply',
+} }] } } });
 export function memoryStorage() {
   const data = new Map<string, string>();
   return { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); }, removeItem: (key: string) => { data.delete(key); } };

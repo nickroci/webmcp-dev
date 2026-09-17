@@ -1,6 +1,6 @@
 import manifest from './plugin.json';
 import { RedditClient } from './client';
-import { browseSchema, listSchema, readSchema, createSchema, subredditPath, normalizePost } from './schemas';
+import { browseSchema, listSchema, readSchema, createSchema, replySchema, subredditPath, normalizePost } from './schemas';
 import { definePlugin, defineTool } from '../../sdk';
 
 export const plugin = definePlugin({
@@ -52,6 +52,12 @@ export const plugin = definePlugin({
           environment.navigate(url);
           return { url, navigation_started: true };
         },
+      }),
+      defineTool({
+        name: 'reddit_reply', title: 'Reply to post or comment', buttonLabel: 'Publish reply', schema: replySchema,
+        description: 'Immediately publish a Markdown reply as the signed-in Reddit user. Supply the intended post fullname (t3_...) or comment fullname (t1_...) from list_posts or read_post. Use only the user’s intended target and reply text. Reuse request_id with identical inputs on retries; never automatically retry an uncertain submission. Returns the comment ID and a URL when available. Refresh the visible thread after success to show the reply.',
+        annotations: { readOnlyHint: false, consequentialHint: true, untrustedContentHint: true },
+        execute: (input, { signal }) => client.reply(input, signal),
       }),
     ] };
   },

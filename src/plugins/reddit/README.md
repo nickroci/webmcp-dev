@@ -9,6 +9,7 @@ API v1 site plugin bundled with [WebMCP Dev](../../../README.md). Use the shared
 | `reddit_browse_subreddit` | `subreddit`, optional `sort`, `time` | Navigates the current tab. Wait for navigation before calling another tool. |
 | `reddit_list_posts` | `subreddit`, optional `sort`, `time`, `limit`, `after` | Returns posts, full Markdown bodies, and pagination cursors without navigating. |
 | `reddit_open_post` | `post` | Opens the post in the visible tab. |
+| `reddit_reply` | `parent_id`, `text`, `request_id` | Publishes a reply to a post (`t3_…`) or comment (`t1_…`). Returns the comment ID and a permalink when the post ID is available. |
 | `reddit_read_post` | `post`, optional `comment_sort`, `comment_limit`, `comment_depth` | Returns the post and flattened comments with `parent_id` and `depth`. |
 | `reddit_create_post` | `subreddit`, `title`, `request_id`, optional `kind`, `text`, `url`, `flair_id`, `flair_text`, `nsfw`, `spoiler`, `send_replies` | Publishes a text or link post and returns its ID and URL. |
 
@@ -72,14 +73,31 @@ await window.redditWebMCP.callTool('reddit_create_post', {
 // Link variant: kind: 'link', url: 'https://example.com', and omit text.
 ```
 
+## Reply to a post or comment
+
+`reddit_reply` publishes immediately through [Reddit's comment endpoint](https://www.reddit.com/dev/api/#POST_api_comment). Use `post.fullname` or `comments[].fullname` from `reddit_read_post`, or a post's `fullname` from `reddit_list_posts`. A `t3_` parent creates a top-level comment; a `t1_` parent creates a nested reply. Bare IDs, URLs, and private-message IDs are rejected so the target type is explicit.
+
+```js
+// This publishes a real reply. Supply the intended parent and text.
+await window.redditWebMCP.callTool('reddit_reply', {
+  parent_id: 't3_POST_ID', // Or 't1_COMMENT_ID' for a nested reply.
+  text: 'Your intended Markdown reply.',
+  request_id: crypto.randomUUID(), // Save and reuse with identical inputs on retries.
+});
+```
+
+Text must be nonblank and at most 10,000 characters. The result contains `id`, `fullname`, `parent_id`, `url`, `author`, and `reused`. The URL is `null` if Reddit confirms the comment but omits the post ID needed to construct its permalink. Refresh the visible thread after success to show the reply; this tool submits through the session without editing the site's reply composer.
+
+The popup provides **Reply to post or comment → Publish reply**, with an automatically generated request ID. Agents discover the same `reddit_reply` schema through MCP. Lost or malformed confirmations return `SUBMISSION_UNCERTAIN` and block resubmission with that ID, including after a page reload. Inspect the thread or your profile before attempting another submission. Live authenticated replies have not been tested; automated tests use mocked Reddit requests.
+
 All local calls return `{ ok: true, data: ... }` or `{ ok: false, error: { code, message, details? } }`. Inputs are validated even when called directly. Calls accept `{ signal }` as an optional third argument for cancellation.
 
 ## Submission behavior and limits
 
-- A signed-in session that exposes Reddit’s legacy modhash is required for posting. When unavailable, the tool returns `SESSION_UNSUPPORTED`; try `old.reddit.com` while signed in. This version has no OAuth fallback.
+- A signed-in session that exposes Reddit’s legacy modhash is required for creating posts and replies. When unavailable, the tool returns `SESSION_UNSUPPORTED`; try `old.reddit.com` while signed in. This version has no OAuth fallback.
 - Reddit can reject requests because of community restrictions, required flair, CAPTCHA, login, API access restrictions, or rate limits. Errors are returned to the caller; this library does not bypass them.
 - Supply any required flair UUID through `flair_id`. Automatic flair discovery is not implemented.
-- Reusing `request_id` with identical normalized inputs returns a completed result or waits for its in-flight request. Reusing it for different content is rejected. Tracking is limited to the current tab/origin and session storage; it is **not** a Reddit server-side idempotency guarantee across tabs, origins, or cleared storage.
+- Post and reply request IDs are tracked separately. Reusing `request_id` with identical normalized inputs returns a completed result or waits for its in-flight request. Reusing it for different content is rejected. Tracking is limited to the current tab/origin and session storage; it is **not** a Reddit server-side idempotency guarantee across tabs, origins, or cleared storage.
 - A failed POST transport, malformed success response, or interrupted submission returns `SUBMISSION_UNCERTAIN`. The same ID cannot resubmit. Check the user’s profile before deciding whether a new submission is necessary. No mutation is automatically retried.
 - Explicit Reddit validation errors allow a corrected retry. Posting success means Reddit accepted a submission; it does not guarantee moderators made it publicly visible.
 - The popup retains its request ID for identical inputs while it stays open. After closing it, inspect the profile before retrying an interrupted submission.

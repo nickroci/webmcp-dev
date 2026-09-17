@@ -23,20 +23,21 @@ function fakeWindow(mode: 'native' | 'legacy' | 'local' | 'failure') {
   return { win, registrations, aborted };
 }
 
-test('registers all five native tools and returns JSON strings', async () => {
+test('registers all six native tools and returns JSON strings', async () => {
   const { win, registrations, aborted } = fakeWindow('native');
   const api = installRedditWebMCP({ window: win });
   await api.ready;
   assert.equal(api.status().mode, 'native');
-  assert.equal(registrations.length, 5);
+  assert.equal(registrations.length, 6);
   const result = JSON.parse(await registrations[1].execute({ subreddit: 'webdev' }));
   assert.equal(result.ok, true);
   assert.equal(registrations[3].annotations.consequentialHint, true);
+  assert.equal(registrations.find(tool => tool.name === 'reddit_reply')!.annotations.consequentialHint, true);
   assert.equal(registrations[1].annotations.untrustedContentHint, true);
   assert.equal(installRedditWebMCP({ window: win }), api);
-  assert.equal(registrations.length, 5);
+  assert.equal(registrations.length, 6);
   api.dispose();
-  assert.equal(aborted.length, 5);
+  assert.equal(aborted.length, 6);
   assert.equal(win.redditWebMCP, undefined);
 });
 
@@ -60,7 +61,7 @@ test('local execution works without WebMCP and does not forge browser APIs', asy
 test('registration failure preserves local tools and reports the failure', async () => {
   const { win } = fakeWindow('failure');
   const api = installRedditWebMCP({ window: win }); await api.ready;
-  assert.equal(api.status().registrationErrors.length, 5);
+  assert.equal(api.status().registrationErrors.length, 6);
   assert.equal(api.status().registered.length, 0);
   assert.equal((await api.callTool('reddit_list_posts', { subreddit: 'webdev' })).ok, true);
 });

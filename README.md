@@ -4,7 +4,7 @@
 
 **A Chrome extension that adds WebMCP to websites that don't natively support it.**
 
-WebMCP Dev injects tools through site plugins. The included Reddit plugin lets agents browse subreddits, list and read posts, and publish posts using your existing signed-in tab. Add plugins to support other websites through the same extension.
+WebMCP Dev injects tools through site plugins. The included Reddit plugin lets agents browse subreddits, list and read posts, publish posts, and reply to posts or comments using your existing signed-in tab. Add plugins to support other websites through the same extension.
 
 A bundled local MCP server connects agents such as Codex and Claude Code to the tabs you choose to share. Navigation tools change the visible page, so you and your agent can work in the same browser tab.
 
@@ -36,7 +36,7 @@ npm run build
 
 After future code or plugin changes, run `npm run build`, reload the same extension, and refresh the website tab. Loading it in one Chrome profile does not install it in your other profiles.
 
-Open the popup on Reddit, choose a tool, enter its inputs, and run it. **Site plugins** lists supported sites and lets you enable or disable each plugin. Settings persist across tabs and browser restarts. **Publish post** immediately submits the supplied content as the account signed into that Reddit tab.
+Open the popup on Reddit, choose a tool, enter its inputs, and run it. **Site plugins** lists supported sites and lets you enable or disable each plugin. Settings persist across tabs and browser restarts. **Publish post** and **Publish reply** immediately submit the supplied content as the account signed into that Reddit tab.
 
 ## Connect Codex or Claude Code locally
 
@@ -77,6 +77,7 @@ See [local connection details, manual config, and troubleshooting](docs/local-mc
 | `reddit_open_post` | Open a post in the visible tab by URL or ID. |
 | `reddit_read_post` | Read a post and bounded comments by URL or ID. |
 | `reddit_create_post` | Publish a text or link post, including optional flair and flags. |
+| `reddit_reply` | Publish a Markdown reply to a post (`t3_…`) or comment (`t1_…`), with duplicate-submission protection. |
 
 See [Reddit inputs and submission behavior](src/plugins/reddit/README.md). Live authenticated posting remains untested; browser tests mock all Reddit requests.
 

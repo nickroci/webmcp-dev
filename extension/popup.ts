@@ -157,7 +157,7 @@ let agentBusy = false;
 async function agentAction(type = 'agent:status', extra: Record<string, unknown> = {}) {
   const state = await sendWorkerMessage({ type, tabId, ...extra });
   if (!state.ok) throw new Error(state.error ?? 'The extension could not complete this action.');
-  if (state.workerVersion !== '0.4.1') throw new WorkerUnavailableError();
+  if (state.workerVersion !== '0.5.0') throw new WorkerUnavailableError();
   sharing = state.shared;
   $('#reload-extension').hidden = true;
   $('#agent-status').textContent = `${state.status}${sharing ? ' · This tab is shared' : ''}`;

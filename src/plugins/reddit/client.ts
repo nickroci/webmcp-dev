@@ -1,5 +1,5 @@
 import { ToolError as RedditError } from '../../errors';
-import { normalizePost, normalizeSubreddit, normalizedSort, redditHosts, type CreateInput, type ListInput, type ReadInput } from './schemas';
+import { normalizePost, normalizeSubreddit, normalizedSort, redditHosts, replySchema, type CreateInput, type ListInput, type ReadInput, type ReplyInput } from './schemas';
 
 type Json = Record<string, any>;
 export interface ClientOptions {
@@ -113,15 +113,25 @@ export class RedditClient {
       if (!input.url || !['https:', 'http:'].includes(new URL(input.url).protocol)) throw new RedditError('INVALID_INPUT', 'Link posts require an HTTP(S) URL.');
       if (input.text !== undefined) throw new RedditError('INVALID_INPUT', 'Use text only with kind: text.');
     } else if (input.url !== undefined) throw new RedditError('INVALID_INPUT', 'Use url only with kind: link.');
-    // Only the fingerprint and outcome persist; post bodies and CSRF tokens are never stored.
-    const fingerprint = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(normalized)))))
+    return this.trackSubmission(`reddit-webmcp:submission:${input.request_id}`, normalized, () => this.submit(normalized, signal), signal);
+  }
+
+  async reply(input: ReplyInput, signal?: AbortSignal): Promise<unknown> {
+    const parsed = replySchema.safeParse(input);
+    if (!parsed.success || !parsed.data.text.trim()) throw new RedditError('INVALID_INPUT', 'Supply a t3_ post or t1_ comment fullname, nonblank reply text up to 10,000 characters, and a valid request_id.');
+    const normalized = { ...parsed.data, parent_id: parsed.data.parent_id.toLowerCase() };
+    return this.trackSubmission(`reddit-webmcp:reply:${input.request_id}`, normalized, () => this.submitReply(normalized, signal), signal);
+  }
+
+  private async trackSubmission(key: string, input: unknown, submit: () => Promise<Record<string, unknown>>, signal?: AbortSignal): Promise<unknown> {
+    // Only the fingerprint and outcome persist; bodies and CSRF tokens are never stored.
+    const fingerprint = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(input)))))
       .map(n => n.toString(16).padStart(2, '0')).join('');
-    const key = `reddit-webmcp:submission:${input.request_id}`;
     let existing: Json | null;
     try { existing = JSON.parse(this.options.storage.getItem(key) ?? 'null'); }
     catch { throw new RedditError('STORAGE_UNAVAILABLE', 'Session storage is unavailable; cannot track this submission safely.'); }
     if (existing) {
-      if (existing.fingerprint !== fingerprint) throw new RedditError('REQUEST_ID_CONFLICT', 'This request_id was already used for different post content.');
+      if (existing.fingerprint !== fingerprint) throw new RedditError('REQUEST_ID_CONFLICT', 'This request_id was already used for different content or a different target.');
       const active = this.inFlight.get(key);
       if (active) return active;
       if (existing.state === 'complete') return { ...existing.result, reused: true };
@@ -129,8 +139,8 @@ export class RedditClient {
     }
     signal?.throwIfAborted();
     try { this.options.storage.setItem(key, JSON.stringify({ fingerprint, state: 'pending' })); }
-    catch { throw new RedditError('STORAGE_UNAVAILABLE', 'Session storage is unavailable; no post was submitted.'); }
-    const task = this.submit(normalized, signal).then(result => {
+    catch { throw new RedditError('STORAGE_UNAVAILABLE', 'Session storage is unavailable; nothing was submitted.'); }
+    const task = submit().then(result => {
       try { this.options.storage.setItem(key, JSON.stringify({ fingerprint, state: 'complete', result })); } catch { /* Pending marker still prevents retry. */ }
       return result;
     }).catch(error => {
@@ -141,6 +151,35 @@ export class RedditClient {
     }).finally(() => { this.inFlight.delete(key); });
     this.inFlight.set(key, task);
     return task;
+  }
+
+  private async submitReply(input: ReplyInput, signal?: AbortSignal) {
+    const me = await this.request('/api/me.json', {}, signal);
+    if (!me.data?.name) throw new RedditError('LOGIN_REQUIRED', 'Sign in to Reddit in this tab before posting a reply.');
+    if (!me.data.modhash) throw new RedditError('SESSION_UNSUPPORTED', 'Reddit did not expose a CSRF modhash for this session. Try the extension on old.reddit.com while signed in.');
+    const body = new URLSearchParams({ api_type: 'json', thing_id: input.parent_id, text: input.text });
+    if (signal?.aborted) throw new RedditError('ABORTED', 'Cancelled before submission.');
+    let response: Json;
+    try {
+      response = await this.request('/api/comment', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Modhash': me.data.modhash }, body: body.toString() }, signal);
+    } catch (error) {
+      throw new RedditError('SUBMISSION_UNCERTAIN', 'Reply did not return a confirmed outcome. Check the thread or your Reddit profile before trying again.', error instanceof RedditError ? { cause: error.code, ...asObject(error.details) } : undefined);
+    }
+    const errors = response.json?.errors;
+    if (Array.isArray(errors) && errors.length) {
+      throw new RedditError('REDDIT_REJECTED', errors.map((entry: unknown[]) => `${entry[0]}: ${entry[1]}`).join('; '), { errors });
+    }
+    const things = response.json?.data?.things;
+    const data = Array.isArray(things) ? things.find(item => item?.kind === 't1')?.data : undefined;
+    const id = data?.id ?? (typeof data?.name === 'string' ? data.name.replace(/^t1_/, '') : undefined);
+    if (typeof id !== 'string' || !/^[a-z0-9]{1,16}$/.test(id) || (data.name && data.name !== `t1_${id}`) || (data.parent_id && data.parent_id !== input.parent_id)) {
+      throw new RedditError('SUBMISSION_UNCERTAIN', 'Reddit did not return a confirmed comment ID for this reply. Check the thread or your profile before retrying.');
+    }
+    // Construct a permalink from the confirmed IDs; never persist the reply body.
+    const post = typeof data.link_id === 'string' && /^t3_[a-z0-9]{1,16}$/.test(data.link_id)
+      ? data.link_id.slice(3) : input.parent_id.startsWith('t3_') ? input.parent_id.slice(3) : undefined;
+    const url = post ? new URL(`/comments/${post}/_/${id}/`, this.origin).href : null;
+    return { id, fullname: `t1_${id}`, parent_id: input.parent_id, url, author: me.data.name, reused: false };
   }
 
   private async submit(input: CreateInput, signal?: AbortSignal) {

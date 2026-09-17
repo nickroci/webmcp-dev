@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RedditClient } from '../src/plugins/reddit/client';
-import { browseSchema, listSchema, readSchema, createSchema, normalizeSubreddit, normalizePost, subredditPath } from '../src/plugins/reddit/schemas';
-import { listing, thread, me, submitted, memoryStorage } from './fixtures';
+import { browseSchema, listSchema, readSchema, createSchema, replySchema, normalizeSubreddit, normalizePost, subredditPath } from '../src/plugins/reddit/schemas';
+import { listing, thread, me, submitted, replied, memoryStorage } from './fixtures';
 
 function harness(responses: Array<unknown | Response | Error>, storage = memoryStorage()) {
   const requests: Array<{ url: URL; init: RequestInit }> = [];
@@ -17,6 +17,7 @@ function harness(responses: Array<unknown | Response | Error>, storage = memoryS
   return { client: new RedditClient({ origin: 'https://www.reddit.com', fetch: fetcher, storage }), requests, storage };
 }
 const textPost = (overrides = {}) => createSchema.parse({ subreddit: 'test', title: 'Test post', text: 'Body', request_id: 'request-1234', ...overrides });
+const replyInput = (overrides = {}) => replySchema.parse({ parent_id: 't3_abc123', text: 'A **reply** & more\n  indented', request_id: 'reply-request-1234', ...overrides });
 
 test('normalizes subreddit names and URLs without allowing path/host injection', () => {
   for (const input of ['webdev', 'r/webdev', '/r/webdev/', 'https://old.reddit.com/r/webdev/new/']) assert.equal(normalizeSubreddit(input), 'webdev');
@@ -160,4 +161,87 @@ test('refuses to submit when persistence is unavailable', async () => {
   const { client, requests } = harness([], { ...memoryStorage(), setItem() { throw new Error('quota exceeded'); } });
   await assert.rejects(client.createPost(textPost()), { code: 'STORAGE_UNAVAILABLE' });
   assert.equal(requests.length, 0);
+});
+
+test('replies to posts and comments with the exact Markdown and session credentials', async () => {
+  for (const parent of ['t3_abc123', 't1_c1']) {
+    const { client, requests, storage } = harness([me, replied(parent)]);
+    const result = await client.reply(replyInput({ parent_id: parent.toUpperCase() }));
+    const request = requests[1];
+    assert.equal(request.url.pathname, '/api/comment');
+    assert.equal(request.init.method, 'POST');
+    assert.equal(request.init.credentials, 'same-origin');
+    assert.equal(request.init.redirect, 'error');
+    assert.equal((request.init.headers as Record<string, string>)['X-Modhash'], me.data.modhash);
+    const body = new URLSearchParams(String(request.init.body));
+    assert.equal(body.get('thing_id'), parent);
+    assert.equal(body.get('api_type'), 'json');
+    assert.equal(body.get('text'), replyInput().text);
+    assert.deepEqual(result, { id: 'reply123', fullname: 't1_reply123', parent_id: parent, url: 'https://www.reddit.com/comments/abc123/_/reply123/', author: 'fixture_user', reused: false });
+    const persisted = storage.getItem('reddit-webmcp:reply:reply-request-1234')!;
+    for (const secret of [replyInput().text, 'Fixture reply', me.data.modhash]) {
+      assert.ok(!persisted.includes(secret));
+      assert.ok(!JSON.stringify(result).includes(secret));
+    }
+  }
+});
+
+test('rejects ambiguous reply targets and invalid text before making requests', async () => {
+  const { client, requests } = harness([]);
+  for (const parent_id of ['abc123', 't4_message', 't3_abc123/other', 'https://www.reddit.com/comments/abc123/']) {
+    assert.equal(replySchema.safeParse({ ...replyInput(), parent_id }).success, false);
+    await assert.rejects(client.reply({ ...replyInput(), parent_id }), { code: 'INVALID_INPUT' });
+  }
+  for (const text of ['', ' \n\t', 'a'.repeat(10001)]) await assert.rejects(client.reply({ ...replyInput(), text }), { code: 'INVALID_INPUT' });
+  assert.equal(requests.length, 0);
+});
+
+test('deduplicates concurrent replies and survives reloads, rejecting changed targets or text', async () => {
+  const { client, requests, storage } = harness([me, replied()]);
+  await Promise.all([client.reply(replyInput()), client.reply(replyInput())]);
+  assert.equal(requests.filter(request => request.init.method === 'POST').length, 1);
+  const reloaded = harness([], storage);
+  assert.equal((await reloaded.client.reply(replyInput({ parent_id: 'T3_ABC123' })) as { reused: boolean }).reused, true);
+  assert.equal(reloaded.requests.length, 0);
+  for (const change of [{ parent_id: 't1_c1' }, { text: 'Different reply' }]) await assert.rejects(client.reply(replyInput(change)), { code: 'REQUEST_ID_CONFLICT' });
+});
+
+test('post and reply request IDs have independent outcomes', async () => {
+  const { client, requests } = harness([me, submitted, me, replied()]);
+  await client.createPost(textPost());
+  const result = await client.reply(replyInput({ request_id: textPost().request_id })) as { fullname: string };
+  assert.equal(result.fullname, 't1_reply123');
+  assert.deepEqual(requests.filter(request => request.init.method === 'POST').map(request => request.url.pathname), ['/api/submit', '/api/comment']);
+});
+
+test('keeps uncertain replies blocked after reload, including malformed or mismatched confirmations', async () => {
+  for (const response of [new TypeError('Connection lost'), new Response('oops', { status: 500 }), { json: { errors: [], data: {} } }, replied('t1_wrong'), { json: { errors: [], data: { things: [{ kind: 't1', data: { id: '../bad' } }] } } }]) {
+    const { client, requests, storage } = harness([me, response]);
+    await assert.rejects(client.reply(replyInput()), { code: 'SUBMISSION_UNCERTAIN' });
+    const reloaded = harness([], storage);
+    await assert.rejects(reloaded.client.reply(replyInput()), { code: 'SUBMISSION_UNCERTAIN' });
+    assert.equal(requests.length, 2);
+    assert.equal(reloaded.requests.length, 0);
+  }
+});
+
+test('surfaces reply rejections and allows corrected input with the same request ID', async () => {
+  const { client, requests } = harness([me, { json: { errors: [['THREAD_LOCKED', 'This thread is locked', 'thing_id']] } }, me, replied('t1_c1')]);
+  await assert.rejects(client.reply(replyInput()), { code: 'REDDIT_REJECTED', message: 'THREAD_LOCKED: This thread is locked' });
+  await client.reply(replyInput({ parent_id: 't1_c1' }));
+  assert.equal(requests.length, 4);
+});
+
+test('does not reply without login, modhash, storage, or after cancellation', async () => {
+  for (const [response, code] of [[{ data: {} }, 'LOGIN_REQUIRED'], [{ data: { name: 'user' } }, 'SESSION_UNSUPPORTED']] as const) {
+    const { client, requests } = harness([response]);
+    await assert.rejects(client.reply(replyInput()), { code });
+    assert.equal(requests.length, 1);
+  }
+  const unavailable = harness([], { ...memoryStorage(), setItem() { throw new Error('quota exceeded'); } });
+  await assert.rejects(unavailable.client.reply(replyInput()), { code: 'STORAGE_UNAVAILABLE' });
+  assert.equal(unavailable.requests.length, 0);
+  const cancelled = harness([]);
+  await assert.rejects(cancelled.client.reply(replyInput(), AbortSignal.abort()), { name: 'AbortError' });
+  assert.equal(cancelled.requests.length, 0);
 });

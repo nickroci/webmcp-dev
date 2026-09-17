@@ -193,7 +193,7 @@ export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab
       }
       await discovery.connect();
       const found = discovery.state();
-      return { ok: true, workerVersion: '0.4.1', status: connected ? status : found.available ? 'Ready for agent requests' : 'Waiting for your local agent…', connected, shared: !!shared[String(message.tabId)], requests: found.requests, port: found.port };
+      return { ok: true, workerVersion: '0.5.0', status: connected ? status : found.available ? 'Ready for agent requests' : 'Waiting for your local agent…', connected, shared: !!shared[String(message.tabId)], requests: found.requests, port: found.port };
     })().then(respond, error => respond({ ok: false, error: error instanceof Error ? error.message : 'Connection failed.' }));
     return true;
   });

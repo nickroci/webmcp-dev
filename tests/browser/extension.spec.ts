@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { listing, thread, me, submitted } from '../fixtures';
+import { listing, thread, me, submitted, replied } from '../fixtures';
 import type { RedditWebMCP } from '../../src/index';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -16,6 +16,7 @@ let context: BrowserContext;
 let profile: string;
 let extensionId: string;
 const submitBodies: string[] = [];
+const replyBodies: string[] = [];
 
 test.beforeAll(async () => {
   profile = await mkdtemp(join(tmpdir(), 'reddit-webmcp-browser-'));
@@ -37,6 +38,10 @@ test.beforeAll(async () => {
       submitBodies.push(request.postData()!);
       return route.fulfill({ json: submitted });
     }
+    if (url.pathname === '/api/comment') {
+      replyBodies.push(request.postData()!);
+      return route.fulfill({ json: replied(new URLSearchParams(request.postData()!).get('thing_id')!) });
+    }
     if (url.pathname.startsWith('/comments/') && url.pathname.endsWith('.json')) return route.fulfill({ json: thread });
     if (url.pathname.endsWith('.json')) {
       return route.fulfill({ json: { ...listing, data: { ...listing.data, after: url.searchParams.has('after') ? null : 't3_abc123' } } });
@@ -57,13 +62,13 @@ test('auto-injects into the main world, lists and reads posts, then reinjects on
     await api.ready;
     return { tools: api.listTools(), list: await api.callTool('reddit_list_posts', { subreddit: 'webdev', sort: 'latest' }), read: await api.callTool('reddit_read_post', { post: 'abc123' }) };
   });
-  expect(result.tools).toHaveLength(5);
+  expect(result.tools).toHaveLength(6);
   expect(result.list).toMatchObject({ ok: true, data: { sort: 'new', next_after: 't3_abc123' } });
   expect(result.read).toMatchObject({ ok: true, data: { post: { id: 'abc123' }, comments: [{ id: 'c1' }, { id: 'c2' }] } });
   await page.evaluate(() => window.redditWebMCP!.callTool('reddit_browse_subreddit', { subreddit: 'javascript', sort: 'top', time: 'week' }));
   await page.waitForURL('https://www.reddit.com/r/javascript/top/?t=week');
   await page.waitForFunction(() => !!window.redditWebMCP);
-  expect(await page.evaluate(() => window.redditWebMCP!.listTools().length)).toBe(5);
+  expect(await page.evaluate(() => window.redditWebMCP!.listTools().length)).toBe(6);
   await page.close();
 });
 
@@ -92,7 +97,7 @@ test('generic popup lists and creates Reddit posts using generated forms', async
   // A real popup does not become the active browser tab. Reload it while the target tab is active.
   await page.bringToFront();
   await popup.reload();
-  await expect(popup.locator('#tool-count')).toHaveText('5 tools available.');
+  await expect(popup.locator('#tool-count')).toHaveText('6 tools available.');
   await popup.getByRole('button', { name: 'List posts', exact: true }).click();
   await expect(popup.locator('#result')).toContainText('A test post <script>not HTML</script>');
   await expect(popup.locator('#result script')).toHaveCount(0);
@@ -107,6 +112,39 @@ test('generic popup lists and creates Reddit posts using generated forms', async
   await popup.getByRole('button', { name: 'Publish post' }).click();
   await expect(popup.locator('#result')).toContainText('xyz789');
   await popup.close(); await page.close();
+});
+
+test('reply forms publish to the intended post or comment and preserve deduplication after reload', async () => {
+  const page = await context.newPage();
+  const popup = await context.newPage();
+  try {
+    await page.goto('https://www.reddit.com/comments/abc123/');
+    await page.waitForFunction(() => !!window.redditWebMCP);
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await page.bringToFront(); await popup.reload();
+    await popup.locator('#tool').selectOption('reddit_reply');
+    await popup.locator('[name=parent_id]').fill('t3_abc123');
+    await popup.locator('[name=text]').fill('A top-level fixture reply');
+    const requestId = await popup.locator('[name=request_id]').inputValue();
+    expect(requestId).toMatch(/^[a-f0-9-]{36}$/);
+    const before = replyBodies.length;
+    await popup.getByRole('button', { name: 'Publish reply', exact: true }).click();
+    await expect(popup.locator('#result')).toContainText('"fullname": "t1_reply123"');
+    expect(new URLSearchParams(replyBodies.at(-1)).get('thing_id')).toBe('t3_abc123');
+    await page.reload();
+    await page.waitForFunction(() => !!window.redditWebMCP);
+    const retry = await page.evaluate(request_id => window.redditWebMCP!.callTool('reddit_reply', {
+      parent_id: 't3_abc123', text: 'A top-level fixture reply', request_id,
+    }), requestId);
+    expect(retry).toMatchObject({ ok: true, data: { reused: true } });
+    expect(replyBodies.length - before).toBe(1);
+    const nested = await page.evaluate(() => window.redditWebMCP!.callTool('reddit_reply', {
+      parent_id: 't1_c1', text: 'A nested fixture reply', request_id: 'nested-fixture-1234',
+    }));
+    expect(nested).toMatchObject({ ok: true, data: { parent_id: 't1_c1', reused: false } });
+    expect(new URLSearchParams(replyBodies.at(-1)).get('thing_id')).toBe('t1_c1');
+    expect(replyBodies.length - before).toBe(2);
+  } finally { await popup.close(); await page.close(); }
 });
 
 test('a separate site package supplies structured input types and dynamic tools', async () => {
@@ -151,7 +189,7 @@ test('a separate site package supplies structured input types and dynamic tools'
 test('plugins can be disabled persistently and reenabled without affecting another plugin', async () => {
   const page = await context.newPage();
   await page.goto('https://www.reddit.com/r/fixture/');
-  await page.waitForFunction(() => window.webMCPDev?.listTools().length === 7);
+  await page.waitForFunction(() => window.webMCPDev?.listTools().length === 8);
   const input = { count: 3, mode: 'brief', config: { label: 'test' }, tags: [], choice: null };
   // Reddit owns the shared runtime; the other bundle has a separate SDK Error class.
   expect(await page.evaluate(input => window.webMCPDev!.callTool('fixture_echo', input), input)).toMatchObject({ ok: false, error: { code: 'FIXTURE_ERROR' } });
@@ -159,17 +197,17 @@ test('plugins can be disabled persistently and reenabled without affecting anoth
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
   await page.bringToFront(); await popup.reload();
-  await expect(popup.locator('#tool-count')).toHaveText('7 tools available.');
+  await expect(popup.locator('#tool-count')).toHaveText('8 tools available.');
   await popup.getByRole('button', { name: 'Site plugins', exact: true }).click();
   await popup.getByRole('checkbox', { name: 'Enable Fixture Site', exact: true }).uncheck();
-  await expect(popup.locator('#tool-count')).toHaveText('5 tools available.');
+  await expect(popup.locator('#tool-count')).toHaveText('6 tools available.');
   await page.reload();
-  await page.waitForFunction(() => window.webMCPDev?.listTools().length === 5);
+  await page.waitForFunction(() => window.webMCPDev?.listTools().length === 6);
   await popup.reload();
   await popup.getByRole('button', { name: 'Site plugins', exact: true }).click();
   await expect(popup.getByRole('checkbox', { name: 'Enable Fixture Site', exact: true })).not.toBeChecked();
   await popup.getByRole('checkbox', { name: 'Enable Fixture Site', exact: true }).check();
-  await expect(popup.locator('#tool-count')).toHaveText('7 tools available.');
+  await expect(popup.locator('#tool-count')).toHaveText('8 tools available.');
   await popup.screenshot({ path: 'test-results/plugin-manager.png', fullPage: true });
   await popup.close(); await page.close();
 });
@@ -212,7 +250,7 @@ test('registers in document.modelContext with the current contract and supports 
     api.dispose();
     return { count: tools.length, result: JSON.parse(value), remaining: (await mc.getTools()).length };
   });
-  expect(result).toMatchObject({ count: 5, result: { ok: true }, remaining: 0 });
+  expect(result).toMatchObject({ count: 6, result: { ok: true }, remaining: 0 });
   await page.close();
 });
 
@@ -258,6 +296,9 @@ test('an actual stdio MCP client requests approval in the extension, navigates v
     const tab = (await call('webmcp_list_tabs')).data.tabs[0];
     expect((await call('webmcp_select_tab', { tab: tab.key })).ok).toBe(true);
     expect((await client.listTools()).tools.some(tool => tool.name === 'reddit_list_posts')).toBe(true);
+    const replyTool = (await client.listTools()).tools.find(tool => tool.name === 'reddit_reply');
+    expect(replyTool?.inputSchema.required).toEqual(['parent_id', 'text', 'request_id']);
+    expect(replyTool?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
     const browse = await call('reddit_browse_subreddit', { subreddit: 'webdev', sort: 'latest' });
     expect(browse.ok).toBe(true);
     await expect(page).toHaveURL('https://www.reddit.com/r/webdev/new/');
@@ -298,6 +339,11 @@ test('an actual stdio MCP client requests approval in the extension, navigates v
     expect((await call('reddit_create_post', input)).data.reused).toBe(false);
     expect((await call('reddit_create_post', input)).data.reused).toBe(true);
     expect(submitBodies.length - before).toBe(1);
+    const repliesBefore = replyBodies.length;
+    const reply = { parent_id: 't1_c1', text: 'MCP fixture reply; never reaches Reddit', request_id: 'mcp-fixture-reply-123' };
+    expect((await call('reddit_reply', reply)).data).toMatchObject({ fullname: 't1_reply123', parent_id: 't1_c1', reused: false });
+    expect((await call('webmcp_call_tool', { tool: 'reddit_reply', input: reply })).data.reused).toBe(true);
+    expect(replyBodies.length - repliesBefore).toBe(1);
     // Cross-origin navigation revokes sharing, even though the new site has a plugin.
     await page.goto('https://example.test/page');
     await expect.poll(async () => (await call('webmcp_list_tabs')).data.tabs.length).toBe(0);
