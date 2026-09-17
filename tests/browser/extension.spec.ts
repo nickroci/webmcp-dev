@@ -62,13 +62,13 @@ test('auto-injects into the main world, lists and reads posts, then reinjects on
     await api.ready;
     return { tools: api.listTools(), list: await api.callTool('reddit_list_posts', { subreddit: 'webdev', sort: 'latest' }), read: await api.callTool('reddit_read_post', { post: 'abc123' }) };
   });
-  expect(result.tools).toHaveLength(6);
+  expect(result.tools).toHaveLength(7);
   expect(result.list).toMatchObject({ ok: true, data: { sort: 'new', next_after: 't3_abc123' } });
   expect(result.read).toMatchObject({ ok: true, data: { post: { id: 'abc123' }, comments: [{ id: 'c1' }, { id: 'c2' }] } });
   await page.evaluate(() => window.redditWebMCP!.callTool('reddit_browse_subreddit', { subreddit: 'javascript', sort: 'top', time: 'week' }));
   await page.waitForURL('https://www.reddit.com/r/javascript/top/?t=week');
   await page.waitForFunction(() => !!window.redditWebMCP);
-  expect(await page.evaluate(() => window.redditWebMCP!.listTools().length)).toBe(6);
+  expect(await page.evaluate(() => window.redditWebMCP!.listTools().length)).toBe(7);
   await page.close();
 });
 
@@ -97,7 +97,7 @@ test('generic popup lists and creates Reddit posts using generated forms', async
   // A real popup does not become the active browser tab. Reload it while the target tab is active.
   await page.bringToFront();
   await popup.reload();
-  await expect(popup.locator('#tool-count')).toHaveText('6 tools available.');
+  await expect(popup.locator('#tool-count')).toHaveText('7 tools available.');
   await popup.getByRole('button', { name: 'List posts', exact: true }).click();
   await expect(popup.locator('#result')).toContainText('A test post <script>not HTML</script>');
   await expect(popup.locator('#result script')).toHaveCount(0);
@@ -189,7 +189,7 @@ test('a separate site package supplies structured input types and dynamic tools'
 test('plugins can be disabled persistently and reenabled without affecting another plugin', async () => {
   const page = await context.newPage();
   await page.goto('https://www.reddit.com/r/fixture/');
-  await page.waitForFunction(() => window.webMCPDev?.listTools().length === 8);
+  await page.waitForFunction(() => window.webMCPDev?.listTools().length === 9);
   const input = { count: 3, mode: 'brief', config: { label: 'test' }, tags: [], choice: null };
   // Reddit owns the shared runtime; the other bundle has a separate SDK Error class.
   expect(await page.evaluate(input => window.webMCPDev!.callTool('fixture_echo', input), input)).toMatchObject({ ok: false, error: { code: 'FIXTURE_ERROR' } });
@@ -197,17 +197,17 @@ test('plugins can be disabled persistently and reenabled without affecting anoth
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
   await page.bringToFront(); await popup.reload();
-  await expect(popup.locator('#tool-count')).toHaveText('8 tools available.');
+  await expect(popup.locator('#tool-count')).toHaveText('9 tools available.');
   await popup.getByRole('button', { name: 'Site plugins', exact: true }).click();
   await popup.getByRole('checkbox', { name: 'Enable Fixture Site', exact: true }).uncheck();
-  await expect(popup.locator('#tool-count')).toHaveText('6 tools available.');
+  await expect(popup.locator('#tool-count')).toHaveText('7 tools available.');
   await page.reload();
-  await page.waitForFunction(() => window.webMCPDev?.listTools().length === 6);
+  await page.waitForFunction(() => window.webMCPDev?.listTools().length === 7);
   await popup.reload();
   await popup.getByRole('button', { name: 'Site plugins', exact: true }).click();
   await expect(popup.getByRole('checkbox', { name: 'Enable Fixture Site', exact: true })).not.toBeChecked();
   await popup.getByRole('checkbox', { name: 'Enable Fixture Site', exact: true }).check();
-  await expect(popup.locator('#tool-count')).toHaveText('8 tools available.');
+  await expect(popup.locator('#tool-count')).toHaveText('9 tools available.');
   await popup.screenshot({ path: 'test-results/plugin-manager.png', fullPage: true });
   await popup.close(); await page.close();
 });
@@ -221,7 +221,10 @@ test('unsupported pages get no injection and still show the plugin catalog', asy
   await expect(popup.locator('#status')).toHaveText('No installed plugin matches this page.');
   expect(await page.evaluate(() => window.webMCPDev)).toBeUndefined();
   await popup.getByRole('button', { name: 'Site plugins', exact: true }).click();
-  await expect(popup.getByRole('checkbox')).toHaveCount(2);
+  // Every installed plugin is listed by name, even on a page none of them inject into.
+  for (const name of ['Enable LinkedIn', 'Enable Reddit', 'Enable Fixture Site']) {
+    await expect(popup.getByRole('checkbox', { name, exact: true })).toHaveCount(1);
+  }
   await popup.close(); await page.close();
 });
 
@@ -250,7 +253,7 @@ test('registers in document.modelContext with the current contract and supports 
     api.dispose();
     return { count: tools.length, result: JSON.parse(value), remaining: (await mc.getTools()).length };
   });
-  expect(result).toMatchObject({ count: 6, result: { ok: true }, remaining: 0 });
+  expect(result).toMatchObject({ count: 7, result: { ok: true }, remaining: 0 });
   await page.close();
 });
 
@@ -337,6 +340,10 @@ test('an actual stdio MCP client requests approval in the extension, navigates v
     const before = submitBodies.length;
     const input = { subreddit: 'test', title: 'MCP fixture', text: 'Never reaches Reddit', request_id: 'mcp-fixture-post-123' };
     expect((await call('reddit_create_post', input)).data.reused).toBe(false);
+    // Publishing moves the tab to the new post, so rediscover before calling again, as with browse and open.
+    // Wait for the intercepted navigation to finish, not just for the URL to commit.
+    await expect(page.locator('h1')).toHaveText('/r/test/comments/xyz789/');
+    expect((await call('webmcp_refresh_tools')).ok).toBe(true);
     expect((await call('reddit_create_post', input)).data.reused).toBe(true);
     expect(submitBodies.length - before).toBe(1);
     const repliesBefore = replyBodies.length;
@@ -381,7 +388,7 @@ test('MCP adapters automatically start and reuse the local relay without a termi
   const run = promisify(execFile);
   try {
     await Promise.all(clients.map((client, index) => client.connect(transports[index])));
-    for (const client of clients) expect((await client.listTools()).tools.length).toBe(5);
+    for (const client of clients) expect((await client.listTools()).tools.length).toBe(6);
     const config = JSON.parse(await readFile(join(stateDir, 'connection.json'), 'utf8'));
     expect(config.port).toBe(port);
     expect((await stat(join(stateDir, 'connection.json'))).mode & 0o777).toBe(0o600);

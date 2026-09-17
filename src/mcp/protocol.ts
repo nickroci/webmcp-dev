@@ -19,9 +19,16 @@ export const pageToolSchema = z.object({
   annotations: z.object({ readOnlyHint: z.boolean(), consequentialHint: z.boolean(), untrustedContentHint: z.boolean() }),
   pluginId: z.string(), pluginName: z.string(),
 });
+export const tabPluginSchema = z.object({
+  id: z.string(), name: z.string(), version: z.string(),
+  expected: z.string().optional(), stale: z.boolean(),
+});
 export const sharedTabSchema = z.object({
   tabId: z.number().int(), documentId: z.string(), url: z.string().url(), title: z.string(),
   tools: z.array(pageToolSchema).max(500),
+  // A document keeps the plugin injected when it loaded, so what it runs can trail the extension.
+  runtimeVersion: z.string().optional(),
+  plugins: z.array(tabPluginSchema).max(50).optional(),
 });
 export type SharedTab = z.infer<typeof sharedTabSchema>;
 export type RemoteTab = SharedTab & { browserId: string; key: string };

@@ -37,10 +37,20 @@ export const plugin = definePlugin({
       }),
       defineTool({
         name: 'reddit_create_post', title: 'Create post', buttonLabel: 'Publish post', schema: createSchema,
-        description: 'Immediately publish a text or link post as the signed-in Reddit user. Use only the user’s intended subreddit and content. Reuse request_id with identical arguments on retries. For link posts supply url and omit text; for text posts supply text and omit url. Supports flair, NSFW, and spoilers.',
+        description: 'Immediately publish a text or link post as the signed-in Reddit user. Use only the user’s intended subreddit and content. Reuse request_id with identical arguments on retries. For link posts supply url and omit text; for text posts supply text and omit url. Supports flair, NSFW, and spoilers. On success the tab moves to the published post, so wait for navigation and rediscover tools.',
         annotations: { readOnlyHint: false, consequentialHint: true, untrustedContentHint: true },
         defaults: current ? { subreddit: current } : {},
-        execute: (input, { signal }) => client.createPost(input, signal),
+        async execute(input, { signal }) {
+          const result = await client.createPost(input, signal);
+          // Show what was published, the way browse and open show what they opened. A deduplicated
+          // retry returns the post the tab already shows, and navigating nowhere never settles.
+          const url = (result as { url?: unknown } | null)?.url;
+          if (typeof url !== 'string') return result;
+          const target = new URL(url, environment.origin);
+          if (target.pathname === environment.window.location.pathname) return result;
+          environment.navigate(target.href);
+          return { ...(result as Record<string, unknown>), navigation_started: true };
+        },
       }),
       defineTool({
         name: 'reddit_open_post', title: 'Open post', buttonLabel: 'Open post', schema: readSchema.pick({ post: true }),

@@ -40,7 +40,7 @@ test('MCP dynamically exposes site schemas, wraps root values, and keeps indepen
   client.setNotificationHandler(ToolListChangedNotificationSchema, () => { changed++; });
   try {
     await server.connect(a); await client.connect(b);
-    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ['webmcp_request_connection', 'webmcp_list_tabs', 'webmcp_select_tab', 'webmcp_refresh_tools', 'webmcp_call_tool']);
+    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ['webmcp_request_connection', 'webmcp_list_tabs', 'webmcp_select_tab', 'webmcp_refresh_tools', 'webmcp_doctor', 'webmcp_call_tool']);
     chrome.send(JSON.stringify({ type: 'snapshot', tabs: [sample] }));
     const [tab] = await waitTabs(connection);
     await client.callTool({ name: 'webmcp_select_tab', arguments: { tab: tab.key } });
@@ -58,12 +58,56 @@ test('MCP dynamically exposes site schemas, wraps root values, and keeps indepen
     const secondServer = createMcpServer(secondConnection); const second = new Client({ name: 'second', version: '1' });
     const [c, d] = InMemoryTransport.createLinkedPair();
     await secondServer.connect(c); await second.connect(d);
-    assert.equal((await second.listTools()).tools.length, 5);
+    assert.equal((await second.listTools()).tools.length, 6);
     await second.close(); await secondServer.close(); secondConnection.close();
     chrome.send(JSON.stringify({ type: 'snapshot', tabs: [] }));
     await waitTabs(connection, 0);
-    assert.equal((await client.listTools()).tools.length, 5);
+    assert.equal((await client.listTools()).tools.length, 6);
     assert.ok(changed > 0);
+  } finally { await client.close(); await server.close(); connection.close(); chrome.close(); await relay.close(); }
+});
+
+test('doctor names a stale document and the only remedy for it', async () => {
+  const config = await bridgeConfig(); const relay = await startRelay(config);
+  const chrome = await browser(config); const connection = await RelayClient.connect(config);
+  const server = createMcpServer(connection); const client = new Client({ name: 'test-agent', version: '1' });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const report = async () => {
+    const response = await client.callTool({ name: 'webmcp_doctor', arguments: {} });
+    return JSON.parse((response.content as Array<{ text: string }>)[0].text).data;
+  };
+  try {
+    await server.connect(a); await client.connect(b);
+    assert.match((await report()).problems.join(' '), /No tab is shared/);
+
+    const stale: SharedTab = { ...sample, runtimeVersion: '0.3.0', plugins: [{ id: 'fixture', name: 'Fixture', version: '0.4.0', expected: '0.5.0', stale: true }] };
+    chrome.send(JSON.stringify({ type: 'snapshot', tabs: [stale] }));
+    await waitTabs(connection);
+    const bad = await report();
+    assert.equal(bad.healthy, false);
+    assert.equal(bad.tabs[0].stale, true);
+    assert.deepEqual(bad.tabs[0].plugins, [{ id: 'fixture', name: 'Fixture', running: '0.4.0', installed: '0.5.0', stale: true }]);
+    // The remedy must say a new tab: an extension reload cannot re-inject an open document.
+    assert.match(bad.problems.join(' '), /NEW tab/);
+
+    const fresh: SharedTab = { ...sample, runtimeVersion: '0.3.0', plugins: [{ id: 'fixture', name: 'Fixture', version: '0.5.0', expected: '0.5.0', stale: false }] };
+    chrome.send(JSON.stringify({ type: 'snapshot', tabs: [] }));
+    await waitTabs(connection, 0);
+    chrome.send(JSON.stringify({ type: 'snapshot', tabs: [fresh] }));
+    const [tab] = await waitTabs(connection);
+    await client.callTool({ name: 'webmcp_select_tab', arguments: { tab: tab.key } });
+    const good = await report();
+    assert.equal(good.healthy, true);
+    assert.deepEqual(good.problems, []);
+    assert.equal(good.selected, tab.key);
+    assert.equal(good.tabs[0].tool_count, 1);
+
+    // A tab from a build before this diagnostic reports nothing, which is itself the signal.
+    chrome.send(JSON.stringify({ type: 'snapshot', tabs: [] }));
+    await waitTabs(connection, 0);
+    chrome.send(JSON.stringify({ type: 'snapshot', tabs: [sample] }));
+    await waitTabs(connection);
+    assert.match((await report()).problems.join(' '), /predates this diagnostic/);
   } finally { await client.close(); await server.close(); connection.close(); chrome.close(); await relay.close(); }
 });
 

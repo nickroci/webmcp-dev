@@ -36,11 +36,17 @@ export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab
       await Promise.all(runtime.listPlugins().map(plugin => runtime.getPlugin(plugin.id)!.ready));
       await runtime.refreshTools();
       if (window.navigation?.transition || location.href !== url) return;
-      return { url, title: document.title, tools: runtime.listTools() };
+      return { url, title: document.title, tools: runtime.listTools(), runtimeVersion: runtime.version, plugins: runtime.listPlugins().map(plugin => ({ id: plugin.id, name: plugin.name, version: plugin.version })) };
     } });
     const frame = results[0];
     if (!frame?.result || !frame.documentId || shared[String(tabId)] !== origin || new URL(frame.result.url).origin !== origin) return;
-    return { tabId, documentId: frame.documentId, ...frame.result };
+    // Only here are both versions visible: what this document runs, and what the extension installed.
+    const installed = await catalog;
+    const plugins = (frame.result.plugins ?? []).map(plugin => {
+      const expected = installed.find(entry => entry.id === plugin.id)?.version;
+      return { ...plugin, ...(expected ? { expected } : {}), stale: !!expected && expected !== plugin.version };
+    });
+    return { tabId, documentId: frame.documentId, ...frame.result, plugins };
   }
   async function publish() {
     await ready;
