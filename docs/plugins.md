@@ -81,7 +81,7 @@ Per-tool `defaults` override schema defaults. JSON mode preserves typed values, 
 
 ## Dynamic discovery and lifecycle
 
-`setup` runs once per enabled plugin per document. It receives `window`, `origin`, bound `fetch`, session `storage`, and `navigate(url)`. Use the tool's execution signal in fetch calls. `navigate` defers navigation briefly so the tool can acknowledge it; callers must reacquire tools after the new document loads.
+`setup` runs once per enabled plugin per document. It receives `window`, `origin`, bound `fetch`, session `storage`, and `navigate(url)`. Use the tool's execution signal in fetch calls. `navigate` defers navigation briefly so the tool can acknowledge it; callers must rediscover tools after navigation, which may replace the document or update its URL in place.
 
 Instead of an array, return a function that discovers the current tools:
 
@@ -151,6 +151,6 @@ Tool names must start with a letter, contain only letters, digits, underscores, 
 
 Object input schemas pass through directly. MCP requires object arguments, so a page tool with a root array, scalar, or union uses `{ "value": <original input> }` at the MCP boundary. The handler still receives its original input type. Optional output schemas describe `{ "ok": true, "data": <handler output> }`; errors use MCP's `isError` flag and a JSON text result. Nested local JSON-pointer references are preserved when wrapping schemas.
 
-For navigation, return `{ url, navigation_started: true }` after calling `environment.navigate(url)`. The bridge waits up to 15 seconds for a replacement document before acknowledging the call. Same-document UI changes should return their normal result. Keep the user-visible page in sync with the task through explicit navigation or DOM updates in your handlers.
+For navigation, return `{ url, navigation_started: true }` after calling `environment.navigate(url)`. The bridge recognizes a replacement document or a URL change within the current document, refreshes the page tools, and publishes the updated tab metadata before acknowledging the call. It also waits for active Navigation API transitions, with a 15-second timeout. For routers using the History API, finish rendering before returning the tool result; the bridge cannot infer when arbitrary asynchronous DOM work is complete. UI changes that do not navigate should return their normal result. Keep the user-visible page in sync with the task through explicit navigation or DOM updates in your handlers.
 
 The extension executes only named registry tools, targeted at the selected document ID. It propagates MCP cancellation via `window.webMCPDev.callRequest(id, name, input)` and `cancelRequest(id)`. Handlers should honor the provided AbortSignal; cancellation cannot undo a request already accepted by the website.

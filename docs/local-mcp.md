@@ -70,7 +70,7 @@ Clients that cache their initial tool list can use the always-present `webmcp_ca
 - All local MCP clients with this installation's credentials can see shared tabs and call their enabled tools. Pairing is not a separate approval for each agent session.
 - Calls target Chrome document IDs and verify the expected URL before execution. A stale page fails instead of executing in a replacement document.
 - One bridge tool call runs per tab at a time. Other calls return `TAB_BUSY`. Human interaction with the page remains available.
-- Navigation acknowledgement waits up to 15 seconds for a replacement document. `NAVIGATION_PENDING` means navigation started but the new page was not ready in that interval.
+- Navigation acknowledgement recognizes both a replacement document and a URL change within the current document. It waits for page tools to be ready, any active Navigation API transition to finish, and updated tab metadata to reach the relay, with a 15-second timeout. `NAVIGATION_PENDING` means navigation started but the new page was not ready in that interval.
 - Cancellation is forwarded to the plugin's AbortSignal. A handler must cooperate with cancellation, and a completed website action cannot be undone by aborting.
 - Lost responses and disconnects never automatically replay actions. An `OUTCOME_UNKNOWN` result requires inspecting the page or account before retrying a mutation. Reddit posting additionally uses its existing request-ID tracking.
 

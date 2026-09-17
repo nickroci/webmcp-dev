@@ -265,6 +265,34 @@ test('an actual stdio MCP client requests approval in the extension, navigates v
     expect((await call('reddit_open_post', { post: 'abc123' })).ok).toBe(true);
     await expect(page).toHaveURL('https://www.reddit.com/comments/abc123/');
     expect((await call('reddit_read_post', { post: 'abc123' })).data.post.id).toBe('abc123');
+    // A site's router can intercept location.assign and keep the document alive.
+    // Exercise the real Reddit tools through that path as well as full loads.
+    const beforeRoute = (await call('webmcp_list_tabs')).data.tabs[0];
+    await page.evaluate(() => {
+      window.navigation.addEventListener('navigate', event => {
+        if (!event.canIntercept) return;
+        event.intercept({ handler: async () => {
+          await new Promise(resolve => setTimeout(resolve, 400));
+          document.title = `Reddit fixture: ${location.pathname}`;
+          document.querySelector('h1')!.textContent = location.pathname;
+        } });
+      });
+    });
+    for (const [name, input, path] of [
+      ['reddit_browse_subreddit', { subreddit: 'webdev', sort: 'latest' }, '/r/webdev/new/'],
+      ['reddit_open_post', { post: 'abc123' }, '/comments/abc123/'],
+    ] as const) {
+      const started = Date.now();
+      const result = await call(name, input);
+      expect(result).toMatchObject({ ok: true, data: { navigation_started: true } });
+      expect(Date.now() - started).toBeLessThan(5000);
+      // Assert immediately: acknowledging just the early URL change is too soon.
+      expect(await page.locator('h1').textContent()).toBe(path);
+      const current = (await call('webmcp_list_tabs')).data.tabs[0];
+      expect(current.documentId).toBe(beforeRoute.documentId);
+      expect(current.url).toBe(`https://www.reddit.com${path}`);
+    }
+    expect((await call('reddit_read_post', { post: 'abc123' })).data.post.id).toBe('abc123');
     const before = submitBodies.length;
     const input = { subreddit: 'test', title: 'MCP fixture', text: 'Never reaches Reddit', request_id: 'mcp-fixture-post-123' };
     expect((await call('reddit_create_post', input)).data.reused).toBe(false);

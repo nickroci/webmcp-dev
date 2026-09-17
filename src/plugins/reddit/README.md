@@ -6,7 +6,7 @@ API v1 site plugin bundled with [WebMCP Dev](../../../README.md). Use the shared
 
 | Tool | Inputs | Behavior |
 | --- | --- | --- |
-| `reddit_browse_subreddit` | `subreddit`, optional `sort`, `time` | Navigates the current tab. Wait for the new document before calling another tool. |
+| `reddit_browse_subreddit` | `subreddit`, optional `sort`, `time` | Navigates the current tab. Wait for navigation before calling another tool. |
 | `reddit_list_posts` | `subreddit`, optional `sort`, `time`, `limit`, `after` | Returns posts, full Markdown bodies, and pagination cursors without navigating. |
 | `reddit_open_post` | `post` | Opens the post in the visible tab. |
 | `reddit_read_post` | `post`, optional `comment_sort`, `comment_limit`, `comment_depth` | Returns the post and flattened comments with `parent_id` and `depth`. |
@@ -18,7 +18,7 @@ Subreddits can be supplied as `webdev`, `r/webdev`, or an HTTPS Reddit subreddit
 
 Comments default to `best`, 25 comments total, and depth 3. Other sorts: `top`, `new`, `old`, `controversial`, `qa`. Set `comment_limit: 0` for just the post. The result reports `comments_truncated` and `more_comments`; this version does not expand unloaded comments.
 
-For a shared browsing workflow, call `reddit_browse_subreddit` before listing and `reddit_open_post` before reading. These navigation tools change the visible page; list/read return structured data. Publishing submits through the current session and returns a post URL; use `reddit_open_post` afterward to show the result. The local MCP bridge waits for the new document after navigation; direct page callers must wait and reacquire the runtime themselves.
+For a shared browsing workflow, call `reddit_browse_subreddit` before listing and `reddit_open_post` before reading. These navigation tools change the visible page; list/read return structured data. Publishing submits through the current session and returns a post URL; use `reddit_open_post` afterward to show the result. The local MCP bridge recognizes both full page loads and URL changes within the current document, and refreshes the shared tools before returning. Direct page callers must wait for navigation and reacquire the runtime if the document was replaced.
 
 ## Call from the page
 
@@ -49,13 +49,13 @@ if (first.ok && first.data.posts.length) {
 }
 ```
 
-Navigation replaces the document. A tool acknowledgement confirms that navigation was started, not that the destination loaded successfully:
+Navigation can replace the document or be handled within it by the site. A direct page API acknowledgement confirms that navigation was started, not that the destination loaded successfully:
 
 ```js
 await window.redditWebMCP.callTool('reddit_browse_subreddit', {
   subreddit: 'javascript', sort: 'top', time: 'week',
 });
-// Wait for navigation, then reacquire window.redditWebMCP in the new document.
+// Wait for navigation; reacquire window.redditWebMCP if the document was replaced.
 ```
 
 The following **publishes a real post** when run in a supported signed-in session. Replace the content and community with the intended destination:

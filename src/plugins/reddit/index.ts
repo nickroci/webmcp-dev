@@ -12,7 +12,7 @@ export const plugin = definePlugin({
     return { tools: [
       defineTool({
         name: 'reddit_browse_subreddit', title: 'Open subreddit', buttonLabel: 'Open subreddit', schema: browseSchema,
-        description: 'Navigate this tab to a subreddit and sort. latest means new. Wait for the new document and rediscover tools after navigation.',
+        description: 'Navigate this tab to a subreddit and sort. latest means new. Wait for navigation and rediscover tools; the site may update the current document in place.',
         annotations: { readOnlyHint: false, consequentialHint: false, untrustedContentHint: false },
         defaults: current ? { subreddit: current } : {},
         execute(input) {

@@ -28,11 +28,15 @@ export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab
     }
     if (tab.status === 'loading') return;
     const results = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: async () => {
+      // Client-side routers can commit the URL before rendering the new page.
+      if (window.navigation?.transition) return;
+      const url = location.href;
       const runtime = window.webMCPDev;
       if (!runtime) return;
       await Promise.all(runtime.listPlugins().map(plugin => runtime.getPlugin(plugin.id)!.ready));
       await runtime.refreshTools();
-      return { url: location.href, title: document.title, tools: runtime.listTools() };
+      if (window.navigation?.transition || location.href !== url) return;
+      return { url, title: document.title, tools: runtime.listTools() };
     } });
     const frame = results[0];
     if (!frame?.result || !frame.documentId || shared[String(tabId)] !== origin || new URL(frame.result.url).origin !== origin) return;
@@ -73,14 +77,19 @@ export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab
       });
       const result = results[0]?.result;
       if (!result) return bridgeError('OUTCOME_UNKNOWN', 'The page changed before a result arrived. Inspect it before retrying an action.');
-      // Navigation tools acknowledge before unloading. Wait for the replacement
-      // document so the next agent call sees the page the human now sees.
+      // Navigation may replace the document or change its URL in place. Wait
+      // for the updated page and registry so subsequent calls use that state.
       if (result.ok && typeof result.data === 'object' && result.data && 'navigation_started' in result.data && result.data.navigation_started) {
         const deadline = Date.now() + 15_000;
         while (Date.now() < deadline && connected && shared[String(call.tabId)]) {
           await new Promise(resolve => setTimeout(resolve, 150));
           const next = await inspect(call.tabId).catch(() => undefined);
-          if (next && next.documentId !== call.documentId) { await publish(); return result; }
+          if (next && (next.documentId !== call.documentId || next.url !== call.url)) {
+            await publish();
+            // A concurrent snapshot may have made publish() return early.
+            // Acknowledge only once the relay has the observed page metadata.
+            if (snapshot.some(tab => tab.tabId === next.tabId && tab.documentId === next.documentId && tab.url === next.url)) return result;
+          }
         }
         return bridgeError('NAVIGATION_PENDING', 'Navigation started but the new page is not ready. Refresh tools before continuing.');
       }
@@ -184,7 +193,7 @@ export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab
       }
       await discovery.connect();
       const found = discovery.state();
-      return { ok: true, workerVersion: '0.4.0', status: connected ? status : found.available ? 'Ready for agent requests' : 'Waiting for your local agent…', connected, shared: !!shared[String(message.tabId)], requests: found.requests, port: found.port };
+      return { ok: true, workerVersion: '0.4.1', status: connected ? status : found.available ? 'Ready for agent requests' : 'Waiting for your local agent…', connected, shared: !!shared[String(message.tabId)], requests: found.requests, port: found.port };
     })().then(respond, error => respond({ ok: false, error: error instanceof Error ? error.message : 'Connection failed.' }));
     return true;
   });
