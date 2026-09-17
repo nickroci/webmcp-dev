@@ -1,0 +1,62 @@
+{
+  "name": "webmcp-dev",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed tools for local AI agents in your existing browser tabs, with plugins for each site.",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/types/sdk.d.ts",
+      "import": "./dist/sdk.js"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs && tsc -p tsconfig.build.json",
+    "plugin:new": "node scripts/new-plugin.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "test:browser": "playwright test",
+    "check": "npm run typecheck && npm test && npm run build && npm run test:browser",
+    "mcp:pair": "node dist/mcp/cli.js pair",
+    "mcp": "node dist/mcp/cli.js",
+    "mcp:stop": "node dist/mcp/cli.js stop"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ws": "^8.21.3",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/chrome": "0.3.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "esbuild": "0.28.2",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/nickroci/webmcp-dev#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nickroci/webmcp-dev.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nickroci/webmcp-dev/issues"
+  },
+  "keywords": [
+    "webmcp",
+    "mcp",
+    "browser",
+    "chrome-extension",
+    "site-plugins",
+    "ai-agents"
+  ]
+}

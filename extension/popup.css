@@ -1,0 +1,23 @@
+:root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #202128; background: #fafafb; }
+* { box-sizing: border-box; } body { width: 480px; margin: 0; font-size: 13px; }
+header { display: flex; align-items: center; gap: 12px; padding: 20px; } .mark { background: #5145cd; color: white; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 11px; font-weight: 800; font-size: 24px; }
+h1 { margin: 0; font-size: 18px; letter-spacing: -.4px; } h2 { margin: 0; font-size: 13px; } p { margin: 5px 0; line-height: 1.5; color: #62636f; } .version { margin-left: auto; color: #797b87; }
+nav { display: flex; gap: 5px; padding: 0 20px 12px; border-bottom: 1px solid #e0e1e7; } nav button { background: transparent; color: #62636f; } nav button[aria-pressed=true] { background: #eeecfc; color: #4535b5; } #refresh { margin-left: auto; }
+main { padding: 14px 20px 8px; } #status { margin: 0 0 16px; font-size: 12px; } #empty { padding: 24px 0; }
+label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 600; } .tool-label { margin-bottom: 6px; }
+input, select, textarea { width: 100%; font: inherit; font-weight: 400; padding: 9px 10px; border: 1px solid #c9cbd5; border-radius: 7px; background: white; color: #202128; }
+input:focus, select:focus, textarea:focus { outline: 2px solid #5145cd44; border-color: #5145cd; } textarea { resize: vertical; } small { font-weight: 400; color: #747682; line-height: 1.4; }
+button { cursor: pointer; border: 0; border-radius: 7px; background: #5145cd; color: white; font: inherit; font-weight: 600; padding: 9px 12px; } button:disabled { opacity: .45; cursor: default; } .secondary { background: #eeeff3; color: #454752; } .text-button { background: transparent; color: #5145cd; padding: 5px; }
+#description { font-size: 12px; margin: 12px 0 8px; } #badges { display: flex; gap: 5px; } .badge { padding: 4px 7px; background: #ebedf2; color: #535561; font-size: 10px; border-radius: 5px; } .consequential { background: #fff0df; color: #925318; }
+.input-heading { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 10px; } fieldset { border: 0; margin: 0; padding: 0; } .field { margin-bottom: 13px; } .field.boolean { flex-direction: row; align-items: center; } .field.boolean input { width: auto; } #json-input, pre { font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; } #json-label { margin-bottom: 14px; }
+#run { width: 100%; } details { margin: 16px 0; } summary { color: #747682; cursor: pointer; } pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; background: #eef0f5; padding: 12px; border-radius: 7px; }
+#output { border-top: 1px solid #e0e1e7; margin-top: 18px; } .plugin { padding: 16px 0; border-bottom: 1px solid #e0e1e7; } .plugin label { flex-direction: row; align-items: center; justify-content: space-between; font-size: 14px; } .plugin input { width: auto; accent-color: #5145cd; } .plugin p, .hint { font-size: 12px; } .plugin code { display: block; color: #747682; font-size: 11px; margin-top: 6px; overflow-wrap: anywhere; }
+footer { display: flex; justify-content: space-between; padding: 14px 20px; color: #777b89; font-size: 10px; } [hidden] { display: none !important; }
+@media (prefers-color-scheme: dark) { :root { background: #1d1e24; color: #f1f1f6; } p, small, summary { color: #b1b2c0; } nav, #output, .plugin { border-color: #393a46; } nav button[aria-pressed=true], .secondary, pre, .badge { background: #2c2e3c; color: #dedafc; } input, select, textarea { background: #252731; border-color: #4b4d5e; color: #f1f1f6; } .text-button { color: #ada6ff; } .consequential { background: #473327; color: #ffce9a; } }
+
+#pair-form { margin: 16px 0; } #pair-form button { margin-top: 8px; } #agent-status { margin: 16px 0 10px; } .agent-actions { display: flex; gap: 8px; }
+
+.connection-request { padding: 16px; margin: 14px 0; border: 1px solid #c9c3f3; border-radius: 10px; background: #f3f1ff; }
+.connection-request .agent-actions { margin-top: 12px; } #agent-error { color: #a12e21; } #port-form { margin: 14px 0; display: flex; align-items: end; gap: 10px; } #port-form label { flex: 1; }
+#reload-extension { margin-bottom: 16px; }
+@media (prefers-color-scheme: dark) { .connection-request { background: #2c2941; border-color: #554d85; } #agent-error { color: #ffb3a8; } }
