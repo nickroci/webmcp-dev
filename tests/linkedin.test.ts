@@ -183,6 +183,30 @@ test('parses a person result, with the degree on the name line or its own', () =
   assert.equal(stacked.headline, 'Client Services Team Leader at Pirum Systems Ltd');
 });
 
+test('does not report card chrome as a person, so the card is dropped rather than named wrongly', () => {
+  // A live "Wematch CEO" search returned this card: no name line, the shared-connections
+  // string first, and a bulleted follower count. The name became the mutuals text, which
+  // carried a real profile past PageReader's nameless-card filter under a fabricated name.
+  const chrome = parseEntity({ kind: 'person', url: 'https://www.linkedin.com/in/ben-challice-7a7b299/', text: [
+    'Ben Challice, Justin J. Lawson & 1 other mutual connection',
+    '\u00b7 1K followers',
+  ].join('\n') });
+  assert.equal(chrome.name, null, 'shared connections are not a name');
+  assert.equal(chrome.headline, null, 'the follower count is not a headline');
+  assert.equal(chrome.followers, 1000, 'a bulleted count still reads as followers');
+  assert.match(chrome.detail!, /mutual connection/, 'the mutuals text is reported as detail');
+  assert.ok(!chrome.name, 'PageReader filters on name, so this card is dropped');
+});
+
+test('reads a follower count whether or not a bullet leads it', () => {
+  assert.equal(parseCount('1K'), 1000);
+  const bulleted = parseEntity({ kind: 'company', url: 'https://www.linkedin.com/company/acme/', text: [
+    'Acme', 'Financial Services', 'London', '\u00b7 2.5K followers',
+  ].join('\n') });
+  assert.equal(bulleted.followers, 2500);
+  assert.equal(bulleted.headline, 'Financial Services', 'the count never lands in the headline');
+});
+
 test('parses a company result, dropping the Follow control', () => {
   const company = parseEntity({ kind: 'company', url: 'https://www.linkedin.com/company/gopirum.com/', text: [
     'Pirum', 'International Trade and Development', 'Seattle', 'Follow',

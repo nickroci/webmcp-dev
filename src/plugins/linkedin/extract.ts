@@ -189,11 +189,22 @@ const DEGREE_SUFFIX = /^(.*?)\s*[•·]\s*(1st|2nd|3rd\+?)\s*$/i;
 const DEGREE_ONLY = /^[•·]?\s*(1st|2nd|3rd\+?)$/i;
 const CARD_CONTROL = /^(follow|following|connect|message|view profile|verified|save|•)$/i;
 const MUTUALS = /mutual connection/i;
+const BULLET = /^[•·]\s*/;
 const FOLLOWERS = /^([\d,.]+(?:[KkMm])?)\s+followers?$/i;
+
+/** Some cards lead the count with a bullet: "· 1K followers". */
+function followersIn(line: string): number | null {
+  const match = line.replace(BULLET, '').match(FOLLOWERS);
+  return match ? parseCount(match[1]!) : null;
+}
 
 export function parseEntity(source: EntitySource): Entity {
   const lines = source.text.split('\n').map(line => line.trim()).filter(Boolean).filter(line => !CARD_CONTROL.test(line));
-  let name: string | null = lines.shift() ?? null;
+  // A card leading with shared connections or a follower count carries no name line.
+  // Shifting it regardless published that chrome as the person's name, which also slipped
+  // the card past the caller's nameless-card filter and reported a real profile wrongly.
+  const first = lines[0];
+  let name: string | null = first && !MUTUALS.test(first) && followersIn(first) === null ? lines.shift()! : null;
   let degree: string | null = null;
 
   if (name) {
@@ -207,8 +218,8 @@ export function parseEntity(source: EntitySource): Entity {
   const remaining: string[] = [];
   let detail: string | null = null;
   for (const line of lines) {
-    const count = line.match(FOLLOWERS);
-    if (count) { followers = parseCount(count[1]!); continue; }
+    const count = followersIn(line);
+    if (count !== null) { followers = count; continue; }
     if (MUTUALS.test(line)) { detail = detail ?? line; continue; }
     remaining.push(line);
   }
