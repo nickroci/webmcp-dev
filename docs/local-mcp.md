@@ -20,7 +20,7 @@ The browser connection stays on your computer. The bridge has no Firecrawl integ
 
 1. Run `npm ci && npm run build` in this project.
 2. Load `dist/extension` in Chrome, or reload the existing unpacked extension. Refresh your Reddit tab afterward.
-3. Configure your local MCP client below and start a new session or reconnect its MCP server.
+3. Configure your local MCP client below, verify the entry reports as connected with `claude mcp list` or `codex mcp list`, then start a new session or reconnect its MCP server. Tools load at session start.
 4. Ask the agent to connect using WebMCP Dev. It calls `webmcp_request_connection`.
 5. Open the extension on the website you want to share and press **Allow and share this tab** on the pending request. No copy/paste step is needed.
 
@@ -93,6 +93,8 @@ Legacy manual pairing remains available under **Advanced connection settings →
 
 | Symptom | Action |
 | --- | --- |
+| Agent has no `webmcp_*` tools | Register the MCP server, then start a new agent session or reconnect it. Confirm the entry with `claude mcp list` or `codex mcp list`. |
+| Registered but not connected | Check the recorded command points at this checkout's built `dist/mcp/cli.js`. Re-register from the checkout, or use the absolute `node` path from `node -p process.execPath`. |
 | No Agents panel | Rebuild and reload the extension from `dist/extension`. |
 | Waiting for your local agent | Start or reconnect the configured local MCP client. |
 | No request appears | Ask the agent to call `webmcp_request_connection`. Check that the extension and server use the same local port. |
@@ -100,6 +102,7 @@ Legacy manual pairing remains available under **Advanced connection settings →
 | Pairing rejected | Request access again from the configured MCP client and approve in the extension. |
 | No shared tabs | Ask the agent to request access, then approve on the intended site. If already connected, use **Share this tab**. Check the Chrome profile. |
 | No site tools yet | Select a shared tab, then rediscover tools. Check that its plugin is enabled. |
+| Tool list missing a newly built tool | The tab still runs the previously injected plugin. Reload the extension, then open the site in a new tab and share that one; same-document navigation does not re-inject. |
 | Refresh this page / stale runtime | Refresh the website after an extension update. |
 | Bridge disconnected | Restart the client's MCP connection. The adapter does not replay an interrupted request. |
 | Port already occupied or incompatible relay | Check `bridge.log`. Stop the old bridge before upgrading, or choose another state directory and port. |
