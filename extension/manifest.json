@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "WebMCP Dev",
   "version": "0.5.0",
-  "description": "Add WebMCP to websites without native support, starting with Reddit. Connect AI agents through a local MCP server.",
+  "description": "Add WebMCP to websites without native support, including Reddit and LinkedIn. Connect AI agents through a local MCP server.",
   "minimum_chrome_version": "120",
   "permissions": [
     "scripting",

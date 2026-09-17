@@ -122,14 +122,15 @@ See [Reddit inputs and submission behavior](src/plugins/reddit/README.md). Live 
 | LinkedIn tool | Behavior |
 | --- | --- |
 | `linkedin_open` | Open the feed, a post, a profile, or a search in the visible tab. |
-| `linkedin_read_feed` | Read feed posts; `only: article` with `limit: 1` returns the top shared article. |
-| `linkedin_search` | Search posts, people, companies, or jobs. |
-| `linkedin_read_post` | Read one post and its top comments by URL or URN. |
-| `linkedin_query_ids` | Diagnostic: which GraphQL query IDs this tab has captured. |
+| `linkedin_read_feed` | Report the feed posts this tab has rendered; `only: article` with `limit: 1` gives the top shared article. |
+| `linkedin_read_post` | Report the open post and the comments rendered beneath it. |
+| `linkedin_search` | Report the rendered search results. |
+| `linkedin_load_more` | Perform one scroll gesture so the next screenful renders. |
+| `linkedin_inspect` | Diagnostic: how much of the page is readable, and the field names found. |
 
-**This plugin reads only; it does not publish.** LinkedIn has no public per-page JSON API, so it uses the same private GraphQL layer the LinkedIn web client uses. Query IDs are never hardcoded — the plugin captures the ones the page issues for itself via `PerformanceObserver`, which is why a read tool needs `linkedin_open` to visit a surface once per session before it can read it.
+**This plugin reads only; it does not publish.** It also makes no requests. LinkedIn's flagship web app is React Server Components now — the Ember app and the Voyager API calls it used to make are gone from the page — so these tools read what the member's own tab has already rendered, and page by performing the same scroll a reader performs. Nothing is fetched that your session did not already load, and nothing is stored.
 
-Two things to read before using it: LinkedIn's User Agreement §8.2 covers browser add-ons that access its data this way, and the field extraction is tested against fixtures rather than a live session. [Both are set out in full, with the maintenance model, in the plugin README](src/plugins/linkedin/README.md).
+That bound is deliberate and enforced: reads are capped at 25 items, pagination is one explicit gesture per call, no tool accepts a list of people to traverse, and no content is written to storage. [The reasoning, the maintenance model, and what is verified against a live session are in the plugin README](src/plugins/linkedin/README.md).
 
 ## Add a plugin
 

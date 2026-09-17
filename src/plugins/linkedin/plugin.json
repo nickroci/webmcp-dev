@@ -1,0 +1,12 @@
+{
+  "$schema": "../../../schemas/plugin.schema.json",
+  "apiVersion": 1,
+  "id": "linkedin",
+  "name": "LinkedIn",
+  "version": "0.1.0",
+  "description": "Read your feed, search posts, people and companies, and read a post \u2014 all from what the page has rendered.",
+  "matches": [
+    "https://linkedin.com/*",
+    "https://www.linkedin.com/*"
+  ]
+}
