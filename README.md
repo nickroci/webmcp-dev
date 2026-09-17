@@ -8,6 +8,10 @@ WebMCP Dev injects tools through site plugins. The included Reddit plugin lets a
 
 A bundled local MCP server connects agents such as Codex and Claude Code to the tabs you choose to share. Navigation tools change the visible page, so you and your agent can work in the same browser tab.
 
+![WebMCP Dev extension open on r/webdev in Chrome, showing the Reddit List posts tool and its input form.](docs/images/webmcp-reddit.png)
+
+*WebMCP for Reddit: the extension exposes site tools directly in your existing browser tab.*
+
 Each plugin owns its tools and schemas. There is no central list of allowed tool types, site-specific popup, or switch statement to extend. The popup discovers tools at runtime and builds their input controls.
 
 ## Install in Chrome
