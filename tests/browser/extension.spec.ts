@@ -356,7 +356,11 @@ test('a new popup recovers from an old worker, including a manifest without alar
     await expect(popup.locator('#reload-extension')).toBeVisible();
     await expect(popup.locator('body')).not.toContainText("Cannot read properties of undefined");
     await cp(join(profile, 'build/extension/background.js'), join(path, 'background.js'));
-    await popup.locator('#reload-extension').click();
+    // Reload can close the popup before Playwright acknowledges the click.
+    // The fresh popup assertions below still require the replacement worker.
+    await popup.locator('#reload-extension').click().catch(error => {
+      if (!popup.isClosed() || !String(error).includes('Target page, context or browser has been closed')) throw error;
+    });
     // Reopening the popup wakes the replacement worker; do not wait for the
     // worker to start before sending the message that wakes it.
     const fresh = await stale.newPage();
