@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePost, parseEntity, parseCount, urnInProps, POST_URN, type PostSource } from '../src/plugins/linkedin/extract';
+import { parsePost, parseEntity, parseJob, parseCount, urnInProps, POST_URN, type PostSource } from '../src/plugins/linkedin/extract';
 import { fiberFromNode, propsFromNode, ascendProps } from '../src/plugins/linkedin/react';
-import { feedSchema, searchSchema, readPostSchema, normalizePostUrn, normalizeProfile, searchPath } from '../src/plugins/linkedin/schemas';
+import { feedSchema, searchSchema, readPostSchema, jobsSchema, normalizePostUrn, normalizeProfile, normalizeJobId, jobPath, searchPath } from '../src/plugins/linkedin/schemas';
 
 const SHARE = 'urn:li:share:7506001468462817280';
 const ACTIVITY = 'urn:li:activity:7100000000000000001';
@@ -220,6 +220,79 @@ test('parses a company result, dropping the Follow control', () => {
   assert.ok(!JSON.stringify(company).includes('"Follow"'), 'a button label is not card content');
 });
 
+test('parses a job card, reading each badge by meaning rather than position', () => {
+  const job = parseJob({ id: '4468608578', url: 'https://www.linkedin.com/jobs/view/4468608578/', text: [
+    'Head of Collateral Operations',
+    'Head of Collateral Operations',
+    'LME Clear',
+    'London, United Kingdom (Hybrid)',
+    '\u00a3120,000/yr - \u00a3150,000/yr',
+    'Promoted',
+    'Easy Apply',
+    '2 days ago',
+    'Over 100 applicants',
+  ].join('\n') });
+  assert.equal(job.title, 'Head of Collateral Operations', 'the repeated link label is not a second field');
+  assert.equal(job.company, 'LME Clear');
+  assert.equal(job.location, 'London, United Kingdom (Hybrid)');
+  assert.equal(job.workplace, 'hybrid');
+  assert.equal(job.salary, '\u00a3120,000/yr - \u00a3150,000/yr');
+  assert.equal(job.posted, '2 days ago');
+  assert.equal(job.applicants, 100, '"Over 100" is a hundred applicants');
+  assert.ok(job.easy_apply && job.promoted, 'badges are flags, never the company');
+  assert.equal(job.applied, false);
+  assert.equal(job.id, '4468608578');
+});
+
+test('a verified posting repeats its title with a badge, which is not the company', () => {
+  // These are the lines a live "collateral management" jobs search returned. The repeat
+  // is not identical on a verified posting, so an exact-match dedup left it in place and
+  // every field below it read one slot late: the company became the location.
+  const job = parseJob({ id: '4467497358', url: 'https://www.linkedin.com/jobs/view/4467497358/', text: [
+    'Head of Document Solutions',
+    'Head of Document Solutions with verification',
+    'FundSense',
+    'London, England, United Kingdom (Remote)',
+  ].join('\n') });
+  assert.equal(job.title, 'Head of Document Solutions');
+  assert.equal(job.company, 'FundSense', 'the badge line is not a company');
+  assert.equal(job.location, 'London, England, United Kingdom (Remote)');
+  assert.equal(job.workplace, 'remote');
+});
+
+test('reads workplace from the location, so a title is never mistaken for one', () => {
+  const job = parseJob({ id: '1234567', url: 'https://www.linkedin.com/jobs/view/1234567/', text: [
+    'Remote Operations Lead', 'Acme Clearing', 'Frankfurt, Germany (On-site)',
+  ].join('\n') });
+  assert.equal(job.workplace, 'on-site', 'the word "Remote" in a title is not the workplace');
+  assert.equal(job.title, 'Remote Operations Lead');
+});
+
+test('a job card leading with badges still finds its title', () => {
+  // The same trap as a person card that leads with shared connections: whatever comes
+  // first is only the title when it is not chrome.
+  const job = parseJob({ id: '99887766', url: 'https://www.linkedin.com/jobs/view/99887766/', text: [
+    'Promoted', 'Easy Apply', 'Viewed', 'Head of Treasury', 'LCH', 'London, United Kingdom',
+  ].join('\n') });
+  assert.equal(job.title, 'Head of Treasury');
+  assert.equal(job.company, 'LCH');
+  assert.ok(job.easy_apply);
+});
+
+test('normalizes every accepted job identifier and rejects the rest', () => {
+  for (const input of [
+    '4468608578',
+    'https://www.linkedin.com/jobs/view/4468608578/',
+    'https://www.linkedin.com/jobs/search/?currentJobId=4468608578&keywords=securities%20finance',
+  ]) assert.equal(normalizeJobId(input), '4468608578', input);
+  assert.equal(jobPath('4468608578'), '/jobs/view/4468608578/');
+  for (const input of ['', 'abc', 'https://evil.test/jobs/view/123456/', 'https://www.linkedin.com/in/ada/']) {
+    assert.throws(() => normalizeJobId(input), input);
+  }
+  assert.equal(searchPath({ keywords: 'securities finance', type: 'jobs' }), '/jobs/search/?keywords=securities%20finance');
+  assert.throws(() => jobsSchema.parse({ limit: 26 }), 'jobs obey the same on-screen cap');
+});
+
 test('caps reads at what a person could take in on screen', () => {
   assert.equal(feedSchema.parse({}).limit, 10);
   assert.equal(feedSchema.parse({}).expand, true);
@@ -249,4 +322,7 @@ test('normalizes profiles and builds search paths', () => {
   assert.equal(searchPath({ keywords: 'ai', type: 'all' }), '/search/results/all/?keywords=ai', 'the all search needs its own segment');
   assert.equal(searchPath({ keywords: 'ai', type: 'posts' }), '/search/results/content/?keywords=ai');
   assert.equal(searchPath({ keywords: 'x', type: 'jobs' }), '/jobs/search/?keywords=x');
+  assert.equal(searchPath({ keywords: 'a b', type: 'people', network: ['1st'] }), '/search/results/people/?keywords=a%20b&network=%5B%22F%22%5D');
+  assert.equal(searchPath({ keywords: 'x', type: 'people', network: ['1st', '2nd', '1st'] }), '/search/results/people/?keywords=x&network=%5B%22F%22%2C%22S%22%5D');
+  assert.throws(() => searchPath({ keywords: 'x', type: 'posts', network: ['1st'] }), 'a degree filter is never dropped silently');
 });

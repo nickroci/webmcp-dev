@@ -4,7 +4,7 @@
 
 **A Chrome extension that adds WebMCP to websites that don't natively support it.**
 
-WebMCP Dev injects tools through site plugins. The included Reddit plugin lets agents browse subreddits, list and read posts, publish posts, and reply to posts or comments using your existing signed-in tab. A LinkedIn plugin reads your feed, searches, and reads posts in the same way. Add plugins to support other websites through the same extension.
+WebMCP Dev injects tools through site plugins. The included Reddit plugin lets agents browse subreddits, list and read posts, publish posts, and reply to posts or comments using your existing signed-in tab. A LinkedIn plugin reads your feed, searches posts, people (optionally only your own connections) and jobs, and reads posts and jobs in the same way. Add plugins to support other websites through the same extension.
 
 A bundled local MCP server connects agents such as Codex and Claude Code to the tabs you choose to share. Navigation tools change the visible page, so you and your agent can work in the same browser tab.
 
@@ -121,10 +121,12 @@ See [Reddit inputs and submission behavior](src/plugins/reddit/README.md). Live 
 
 | LinkedIn tool | Behavior |
 | --- | --- |
-| `linkedin_open` | Open the feed, a post, a profile, or a search in the visible tab. |
+| `linkedin_open` | Open the feed, a post, a profile, a job, or a search in the visible tab. `network: ["1st"]` with `type: people` searches only your own connections. |
 | `linkedin_read_feed` | Report the feed posts this tab has rendered; `only: article` with `limit: 1` gives the top shared article. |
 | `linkedin_read_post` | Report the open post and the comments rendered beneath it. |
-| `linkedin_search` | Report the rendered search results. |
+| `linkedin_search` | Report the rendered search results: posts, people (with connection degree), companies, or jobs. |
+| `linkedin_read_jobs` | Report the job cards a jobs search has rendered. |
+| `linkedin_read_job` | Report the open job with its full description. |
 | `linkedin_load_more` | Perform one scroll gesture so the next screenful renders. |
 | `linkedin_inspect` | Diagnostic: how much of the page is readable, and the field names found. |
 

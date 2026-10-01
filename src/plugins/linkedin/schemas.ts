@@ -26,16 +26,25 @@ export const readPostSchema = z.strictObject({
   expand,
 });
 
+export const jobsSchema = z.strictObject({ limit });
+
+export const readJobSchema = z.strictObject({
+  expect: z.string().max(2048).optional().describe('Optional job URL or numeric ID the tab should be showing. The read fails rather than returning a different job.'),
+});
+
 export const openSchema = z.strictObject({
-  target: z.enum(['feed', 'post', 'profile', 'search']).default('feed'),
-  value: z.string().max(2048).optional().describe('Post URL or URN, profile URL or public identifier, or search keywords. Omit for the feed.'),
+  target: z.enum(['feed', 'post', 'profile', 'job', 'search']).default('feed'),
+  value: z.string().max(2048).optional().describe('Post URL or URN, profile URL or public identifier, job URL or numeric ID, or search keywords. Omit for the feed.'),
   type: z.enum(['all', 'posts', 'people', 'companies', 'jobs']).default('all').describe('Which search to open. Used only with target "search"; posts finds articles and updates.'),
+  network: z.array(z.enum(['1st', '2nd', '3rd'])).min(1).max(3).optional().describe('Keep only people at these connection degrees, e.g. ["1st"] for the member\u2019s own connections. Used only with a people search.'),
 });
 
 export type FeedInput = z.infer<typeof feedSchema>;
 export type SearchInput = z.infer<typeof searchSchema>;
 export type ReadPostInput = z.infer<typeof readPostSchema>;
 export type OpenInput = z.infer<typeof openSchema>;
+export type JobsInput = z.infer<typeof jobsSchema>;
+export type ReadJobInput = z.infer<typeof readJobSchema>;
 
 function linkedinURL(value: string): URL {
   let url: URL;
@@ -81,8 +90,34 @@ export function normalizeProfile(value: string): string {
 
 export function postPath(urn: string): string { return `/feed/update/${urn}/`; }
 
-export function searchPath(input: { keywords: string; type: SearchInput['type'] }): string {
+/** A job is identified by the numeric id in /jobs/view/<id>/, or by ?currentJobId=. */
+export function normalizeJobId(value: string): string {
+  const input = value.trim();
+  if (/^[0-9]{4,20}$/.test(input)) return input;
+  if (/^https?:/i.test(input)) {
+    const url = linkedinURL(input);
+    const current = url.searchParams.get('currentJobId');
+    if (current && /^[0-9]{4,20}$/.test(current)) return current;
+    const path = decodeURIComponent(url.pathname).match(/\/jobs\/view\/([0-9]{4,20})/);
+    if (path) return path[1]!;
+    throw new ToolError('INVALID_INPUT', 'That LinkedIn URL does not contain a job ID. Use a /jobs/view/ URL or one with currentJobId.');
+  }
+  throw new ToolError('INVALID_INPUT', 'Expected a LinkedIn job URL or numeric job ID.');
+}
+
+export function jobPath(id: string): string { return `/jobs/view/${id}/`; }
+
+/** LinkedIn's own codes for connection degree: F(irst), S(econd), O(ut of network). */
+const NETWORK_CODES = { '1st': 'F', '2nd': 'S', '3rd': 'O' } as const;
+
+export function searchPath(input: { keywords: string; type: SearchInput['type']; network?: OpenInput['network'] }): string {
   const segment = { all: 'all/', posts: 'content/', people: 'people/', companies: 'companies/', jobs: '' }[input.type];
   const base = input.type === 'jobs' ? '/jobs/search/' : `/search/results/${segment}`;
-  return `${base}?keywords=${encodeURIComponent(input.keywords)}`;
+  const path = `${base}?keywords=${encodeURIComponent(input.keywords)}`;
+  if (!input.network) return path;
+  // Degree belongs to people. Silently dropping it elsewhere would return results from
+  // outside the member's network to a caller who asked for only their own connections.
+  if (input.type !== 'people') throw new ToolError('INVALID_INPUT', 'network applies only to a people search. Use type "people".');
+  const codes = [...new Set(input.network)].map(degree => NETWORK_CODES[degree]);
+  return `${path}&network=${encodeURIComponent(JSON.stringify(codes))}`;
 }

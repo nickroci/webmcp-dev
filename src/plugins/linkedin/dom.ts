@@ -1,5 +1,5 @@
 import { fiberFromNode } from './react';
-import { urnInProps, type EntitySource, type PostSource } from './extract';
+import { urnInProps, type EntitySource, type JobSource, type PostSource } from './extract';
 
 /**
  * The DOM adapter: finds each rendered post card and the URN identifying it.
@@ -139,6 +139,52 @@ export function readEntitySources(root: ParentNode, kind: 'person' | 'company', 
   const cards = [...byUrl.entries()];
   const kept = cards.filter(([, element]) => !cards.some(([, other]) => other !== element && element.contains(other)));
   return kept.map(([url, element]) => ({ url: absolute(url), text: textOf(element), kind }));
+}
+
+/**
+ * A job card carries no URN and no profile link. Identity is the numeric id in its own
+ * /jobs/view/<id>/ link. Jobs search is a split pane, so the detail on the right and the
+ * card on the left share an id; the smallest block wins, as it does for entity cards.
+ */
+const MIN_JOB_TEXT = 30;
+
+export function readJobSources(root: ParentNode, minText = MIN_JOB_TEXT): JobSource[] {
+  const blocks = cardBlocks(root, minText);
+  const byId = new Map<string, Element>();
+
+  for (const block of blocks) {
+    const id = jobIdIn(block);
+    if (!id) continue;
+    if (textOf(block).split('\n').filter(Boolean).length < 2) continue;
+    const current = byId.get(id);
+    if (!current || textOf(block).length < textOf(current).length) byId.set(id, block);
+  }
+
+  const cards = [...byId.entries()];
+  const kept = cards.filter(([, element]) => !cards.some(([, other]) => other !== element && element.contains(other)));
+  return kept.map(([id, element]) => ({ id, url: `https://www.linkedin.com/jobs/view/${id}/`, text: textOf(element) }));
+}
+
+/**
+ * The posting body, which is never the card. On a jobs search it is the detail pane
+ * beside the list; on /jobs/view/<id>/ it is the page, which links to no job because it
+ * *is* the job. Both are the largest block carrying no job link of their own, so cards
+ * and the "similar jobs" rail drop out. `contains` pins it to the open job when the card
+ * is there to say what its title is.
+ */
+export function readJobBody(root: ParentNode, contains: string | null, minText = MIN_JOB_TEXT): string | null {
+  const blocks = cardBlocks(root, minText).filter(block => !jobIdIn(block));
+  const pinned = contains ? blocks.filter(block => textOf(block).includes(contains)) : [];
+  const best = (pinned.length ? pinned : blocks).sort((a, b) => textOf(b).length - textOf(a).length)[0];
+  return best ? textOf(best) : null;
+}
+
+export function jobIdIn(element: Element): string | null {
+  for (const anchor of element.querySelectorAll('a[href*="/jobs/view/"]')) {
+    const match = (anchor.getAttribute('href') ?? '').match(/\/jobs\/view\/(\d{4,20})/);
+    if (match) return match[1]!;
+  }
+  return null;
 }
 
 function absolute(href: string): string {

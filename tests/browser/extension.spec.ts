@@ -282,7 +282,10 @@ test('an actual stdio MCP client requests approval in the extension, navigates v
     await popup.getByText('Advanced connection settings', { exact: true }).click();
     await popup.locator('#bridge-port').fill(String(config.port));
     await popup.getByRole('button', { name: 'Use port', exact: true }).click();
-    await expect(popup.locator('#agent-status')).toContainText('Ready for agent requests');
+    // Discovery flips available only when the relay's first message lands. setPort
+    // connects at once, but a first attempt that beats the relay to the port waits for
+    // the 3s retry in agent-bridge, so the worst case exceeds the 5s default budget.
+    await expect(popup.locator('#agent-status')).toContainText('Ready for agent requests', { timeout: 20_000 });
     await expect(popup.getByRole('button', { name: 'Share this tab', exact: true })).toBeDisabled();
     const request = await call('webmcp_request_connection');
     expect(request.data.status).toBe('pending');

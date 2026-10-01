@@ -106,6 +106,97 @@ export function parsePost(source: PostSource): Post {
   };
 }
 
+/**
+ * Job cards are a third identity model. Posts take identity from a URN in their props,
+ * people and companies from the card's own /in/ or /company/ link, and jobs from the
+ * numeric id in their /jobs/view/<id>/ link, which is what ?currentJobId= also carries.
+ */
+export interface JobSource { id: string; url: string; text: string }
+
+export interface Job {
+  id: string;
+  url: string;
+  title: string | null;
+  company: string | null;
+  location: string | null;
+  workplace: 'remote' | 'hybrid' | 'on-site' | null;
+  posted: string | null;
+  applicants: number | null;
+  salary: string | null;
+  easy_apply: boolean;
+  promoted: boolean;
+  applied: boolean;
+}
+
+const JOB_WORKPLACE = /\b(remote|hybrid|on-?site)\b/i;
+const JOB_APPLICANTS = /(?:over\s+)?([\d,]+)\s*\+?\s*(?:applicants?|people clicked apply)/i;
+const JOB_AGE = /^(?:reposted\s+)?\d+\s+(?:second|minute|hour|day|week|month|year)s?\s+ago$/i;
+const JOB_SALARY = /[\u00a3$\u20ac]\s?[\d,]+(?:\.\d+)?\s*[KkMm]?/;
+/** The accessible label of a verified posting's link: "<title> with verification". */
+const JOB_LABEL_BADGE = /\s+with\s+verification$/i;
+const JOB_EASY_APPLY = /^easy apply$/i;
+const JOB_PROMOTED = /^promoted$/i;
+const JOB_APPLIED = /^applied$/i;
+/** Badges the card shows beside the job, none of which are the title or the company. */
+const JOB_CHROME = /^(viewed|saved|save|new|actively reviewing applicants|be an early applicant|your profile matches this job|promoted by hirer)$/i;
+
+export function parseJob(source: JobSource): Job {
+  // A job card repeats its title as the accessible text of its own link, so the raw
+  // lines carry each field twice. On a verified posting the repeat is not identical:
+  // LinkedIn appends a badge, and that one surviving line shifts company and location
+  // down a slot, so strip the badge before deduplicating rather than after.
+  const seen = new Set<string>();
+  const lines = source.text.split('\n')
+    .map(line => line.trim().replace(JOB_LABEL_BADGE, '').trim())
+    .filter(Boolean)
+    .filter(line => { const key = line.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; });
+
+  let workplace: Job['workplace'] = null;
+  let applicants: number | null = null;
+  let salary: string | null = null;
+  let posted: string | null = null;
+  let easy_apply = false;
+  let promoted = false;
+  let applied = false;
+  const rest: string[] = [];
+
+  for (const line of lines) {
+    if (JOB_EASY_APPLY.test(line)) { easy_apply = true; continue; }
+    if (JOB_PROMOTED.test(line)) { promoted = true; continue; }
+    if (JOB_APPLIED.test(line)) { applied = true; continue; }
+    const count = line.match(JOB_APPLICANTS);
+    if (count) { applicants = parseCount(count[1]!); continue; }
+    // Checked before the salary test: "2 days ago" carries no currency, but an age line
+    // must never be mistaken for the company once positions are read off `rest`.
+    if (!posted && JOB_AGE.test(line)) { posted = line; continue; }
+    if (!salary && JOB_SALARY.test(line)) { salary = line; continue; }
+    if (JOB_CHROME.test(line)) continue;
+    rest.push(line);
+  }
+
+  // Workplace is appended to the location rather than given a line of its own, so read
+  // the location first: a title such as "Remote Operations Lead" is not a workplace.
+  const located = rest[2] ?? null;
+  const workplaceLine = (located && JOB_WORKPLACE.test(located) ? located : rest.find(line => JOB_WORKPLACE.test(line))) ?? null;
+  const match = workplaceLine?.match(JOB_WORKPLACE);
+  if (match) workplace = match[1]!.toLowerCase().replace('onsite', 'on-site') as Job['workplace'];
+
+  return {
+    id: source.id,
+    url: source.url,
+    title: rest[0] ?? null,
+    company: rest[1] ?? null,
+    location: located,
+    workplace,
+    posted,
+    applicants,
+    salary,
+    easy_apply,
+    promoted,
+    applied,
+  };
+}
+
 /** A display name is short and is not a sentence. */
 function nameLike(line: string): boolean {
   return line.length <= 80 && !/[.!?:]$/.test(line.trim());
