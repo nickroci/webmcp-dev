@@ -8,10 +8,13 @@ API v1 site plugin bundled with [WebMCP Dev](../../../README.md). Reports the Li
 
 | Tool | Inputs | Behavior |
 | --- | --- | --- |
-| `linkedin_open` | `target`, optional `value`, `type` | Navigates the visible tab to the feed, a post, a profile, or a search. `type` picks the kind of search. |
+| `linkedin_open` | `target`, optional `value`, `type`, `network` | Navigates the visible tab to the feed, a post, a profile, a job, or a search. `type` picks the kind of search; `network` (`1st`/`2nd`/`3rd`) narrows a people search by connection degree. |
 | `linkedin_read_feed` | optional `limit`, `only`, `expand` | Reports rendered feed posts. `only: article` with `limit: 1` gives the top shared article. |
 | `linkedin_read_post` | optional `expect`, `comment_limit`, `expand` | Reports the open post. `expect` fails rather than reading the wrong one. |
-| `linkedin_search` | `keywords`, optional `type`, `limit` | Reports rendered results: posts, people, or companies. |
+| `linkedin_search` | `keywords`, optional `type`, `limit` | Reports rendered results: posts, people, companies, or jobs. |
+| `linkedin_read_jobs` | optional `limit` | Reports the job cards a jobs search has rendered. |
+| `linkedin_read_job` | optional `expect` | Reports the open job and its description. |
+| `linkedin_read_profile` | optional `expect`, `expand` | Reports the one profile the tab is showing. Rails listing other members are left out. |
 | `linkedin_load_more` | — | One scroll gesture, then stop. Requires the tab to be on screen. |
 | `linkedin_inspect` | — | Diagnostic: what each extractor can currently see. |
 
@@ -40,7 +43,7 @@ The standard is what an assistive reader may do: programmatically read what is o
 | Present view only | Reads rendered output; more requires an explicit `linkedin_load_more` call |
 | Human scale | `limit` capped at 25, default 10; `comment_limit` capped at 50 |
 | No accumulation | Nothing is written to storage; content is returned and forgotten |
-| No profile traversal | No tool accepts a list of people — you read the results page you are on |
+| No profile traversal | No tool accepts a list of people. `linkedin_read_profile` reads only the profile already open, one per navigation |
 | User initiated | No timers, no polling, no internal loops; one gesture per call |
 
 An agent is not a screen reader: it can ask faster and wider than a person, and bulk profile collection is the specific thing §8.2 names. The limits exist because behaviour, not intent, is what keeps this inside the bound. Widening them is how it would leave.

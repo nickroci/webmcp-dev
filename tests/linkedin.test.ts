@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePost, parseEntity, parseJob, parseCount, urnInProps, POST_URN, type PostSource } from '../src/plugins/linkedin/extract';
+import { parsePost, parseEntity, parseJob, parseProfile, sectionLines, parseCount, urnInProps, POST_URN, type PostSource } from '../src/plugins/linkedin/extract';
 import { fiberFromNode, propsFromNode, ascendProps } from '../src/plugins/linkedin/react';
-import { feedSchema, searchSchema, readPostSchema, jobsSchema, normalizePostUrn, normalizeProfile, normalizeJobId, jobPath, searchPath } from '../src/plugins/linkedin/schemas';
+import { feedSchema, searchSchema, readPostSchema, readProfileSchema, jobsSchema, normalizePostUrn, normalizeProfile, normalizeJobId, jobPath, profilePath, searchPath } from '../src/plugins/linkedin/schemas';
 
 const SHARE = 'urn:li:share:7506001468462817280';
 const ACTIVITY = 'urn:li:activity:7100000000000000001';
@@ -291,6 +291,67 @@ test('normalizes every accepted job identifier and rejects the rest', () => {
   }
   assert.equal(searchPath({ keywords: 'securities finance', type: 'jobs' }), '/jobs/search/?keywords=securities%20finance');
   assert.throws(() => jobsSchema.parse({ limit: 26 }), 'jobs obey the same on-screen cap');
+});
+
+test('reads a profile top card by its landmarks, not by line position', () => {
+  // The shape a live profile renders now: the name is an h2, the dot before Contact
+  // info is a line of its own, and company and school follow the location.
+  const profile = parseProfile({
+    url: 'https://www.linkedin.com/in/ada-example/',
+    name: 'Ada Example',
+    top: [
+      'Ada Example', 'She/Her', '\u00b7 1st', 'Head of Securities Finance at Example Bank',
+      'London, England, United Kingdom', '\u00b7', 'Contact info',
+      'Example Bank', 'University of Somewhere', '500+ connections',
+      'Bo, Cy and 16 other mutual connections', 'Message', 'More',
+    ].join('\n'),
+    sections: [],
+  });
+  assert.equal(profile.name, 'Ada Example');
+  assert.equal(profile.degree, '1st');
+  assert.equal(profile.headline, 'Head of Securities Finance at Example Bank', 'pronouns and degree are not the headline');
+  assert.equal(profile.location, 'London, England, United Kingdom', 'a lone dot before Contact info is not the location');
+  assert.deepEqual(profile.affiliations, ['Example Bank', 'University of Somewhere']);
+  assert.equal(profile.connections, '500+ connections');
+  assert.equal(profile.mutual_connections, 'Bo, Cy and 16 other mutual connections');
+});
+
+test('keeps the person\u2019s own sections and drops rails that list other members', () => {
+  const profile = parseProfile({
+    url: 'https://www.linkedin.com/in/ada-example/',
+    name: 'Ada Example \u00b7 2nd',
+    top: 'Ada Example \u00b7 2nd\nCOO at Lender Co\nParis, France \u00b7 Contact info',
+    sections: [
+      { heading: 'About', text: 'About\nAbout\nTwenty years in collateral.\n\u2026see more' },
+      { heading: 'Activity', text: 'Activity\n548 followers\nPosts\nComments\nAda Example\nCOO at Lender Co\nPleased to speak at the conference.\nShow all' },
+      { heading: 'Experience', text: 'Experience\nExperience\nCOO\nCOO\nLender Co\nShow all 9 experiences' },
+      { heading: 'Explore Premium profiles', text: 'Explore Premium profiles\nSomeone Else\nCEO at Elsewhere' },
+      { heading: 'Ad Options', text: 'Ad Options\nBuy things' },
+    ],
+  });
+  assert.equal(profile.name, 'Ada Example');
+  assert.equal(profile.degree, '2nd');
+  assert.equal(profile.location, 'Paris, France', 'an inline "\u00b7 Contact info" still marks the location');
+  assert.equal(profile.headline, 'COO at Lender Co');
+  assert.equal(profile.about, 'Twenty years in collateral.');
+  assert.deepEqual(profile.sections, [
+    { heading: 'Activity', lines: ['Pleased to speak at the conference.'] },
+    { heading: 'Experience', lines: ['COO', 'Lender Co'] },
+  ], 'screen-reader repeats, tabs, counts and "Show all" collapse');
+  assert.ok(!JSON.stringify(profile).includes('Someone Else'), 'another member on a rail is not part of this profile');
+  assert.equal(readProfileSchema.parse({}).expand, true);
+});
+
+test('opens a profile section on its own page, and only for a profile', () => {
+  assert.equal(profilePath('ada-example'), '/in/ada-example/');
+  assert.equal(profilePath('ada-example', 'experience'), '/in/ada-example/details/experience/');
+  // A details page renders the suggestion rail and the footer in the same text as the
+  // list. Those name other members, so the read stops where the subject's list ends.
+  assert.deepEqual(sectionLines('Experience', [
+    'Experience', 'COO', 'Lender Co \u00b7 Full-time', 'Dec 2003 - Present',
+    'More profiles for you', 'Someone Else', '\u00b7 2nd', 'CEO at Elsewhere', 'Connect', 'About', 'Accessibility',
+  ].join('\n')), ['COO', 'Lender Co \u00b7 Full-time', 'Dec 2003 - Present']);
+  assert.deepEqual(sectionLines('Activity', 'Activity\n\u2022 1st\n3mo \u2022\nGood panel today.\n\u2026 more'), ['Good panel today.'], 'degree, age and "\u2026 more" are not activity');
 });
 
 test('caps reads at what a person could take in on screen', () => {

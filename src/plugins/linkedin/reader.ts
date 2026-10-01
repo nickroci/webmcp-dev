@@ -1,8 +1,8 @@
 import { ToolError } from '../../errors';
 import { PageActions } from './actions';
-import { parseEntity, parseJob, parsePost, type Entity, type Job, type Post } from './extract';
-import { readEntitySources, readJobBody, readJobSources, readPostSources } from './dom';
-import { normalizeJobId, normalizePostUrn, type FeedInput, type JobsInput, type ReadJobInput, type ReadPostInput, type SearchInput } from './schemas';
+import { parseEntity, parseJob, parsePost, parseProfile, sectionLines, type Entity, type Job, type Post } from './extract';
+import { readEntitySources, readJobBody, readJobSources, readPostSources, profileAboutSection, readProfileDetails, readProfileSource } from './dom';
+import { normalizeJobId, normalizePostUrn, normalizeProfile, type FeedInput, type JobsInput, type ReadJobInput, type ReadPostInput, type ReadProfileInput, type SearchInput } from './schemas';
 
 /**
  * Reads the page the member is already looking at. Every method works from rendered
@@ -91,6 +91,42 @@ export class PageReader {
     return { job: { ...summary, description: body ?? card!.text }, note: NOTE };
   }
 
+  /**
+   * The one profile this tab is showing. Identity comes from the URL, as for a job.
+   * LinkedIn now shows only the top card and activity on /in/<id>/, and puts Experience,
+   * Education and the rest on /in/<id>/details/<section>/, so either page is read here.
+   */
+  readProfile(input: ReadProfileInput) {
+    const path = decodeURIComponent(new URL(this.window.location.href).pathname);
+    const match = path.match(/^\/in\/([^/]+)(?:\/details\/([a-z-]+))?/i);
+    const open = match?.[1] ?? null;
+    if (!open) throw new ToolError('NOT_FOUND', 'This page is not showing a profile. Open one with linkedin_open (target "profile") first.');
+    if (input.expect && normalizeProfile(input.expect).toLowerCase() !== open.toLowerCase()) {
+      throw new ToolError('WRONG_PAGE', `This tab is showing /in/${open}/, not the profile expected.`);
+    }
+    const url = `https://www.linkedin.com/in/${encodeURIComponent(open)}/`;
+    const root = this.actions.root();
+
+    const detail = match?.[2];
+    if (detail) {
+      const source = readProfileDetails(root);
+      if (!source) throw new ToolError('NOTHING_RENDERED', 'The section is open but nothing is rendered yet. Wait for it to load and read again.');
+      return { profile: { url, section: detail, heading: source.heading, lines: sectionLines(source.heading, source.text) }, note: 'Read from this profile section as rendered. Call linkedin_load_more for a long list.' };
+    }
+
+    // Only About is expanded. Elsewhere on a profile "…more" belongs to an activity post,
+    // and clicking it navigates to that post, leaving the profile the caller asked for.
+    const about = input.expand ? profileAboutSection(root) : null;
+    const expanded = about ? this.actions.expandTruncated(4, about) : 0;
+    const source = readProfileSource(root, url, this.window.document.title);
+    if (!source) throw new ToolError('NOTHING_RENDERED', 'The profile is open but nothing is rendered yet. Wait for it to load and read again.');
+    return {
+      profile: parseProfile(source),
+      expanded,
+      note: 'Read from this profile as rendered. Experience, education, skills and certifications are on their own pages: open them with linkedin_open (target "profile", section).',
+    };
+  }
+
   readSearch(input: SearchInput) {
     const note = 'Read from the rendered search results. Open a different search with linkedin_open before reading other keywords.';
     const shape = (results: Post[] | Entity[], kind: string) => ({
@@ -131,6 +167,7 @@ export class PageReader {
       jobsFound: jobSources.length,
       firstJob: jobSources[0] ? { id: jobSources[0].id, lines: jobSources[0].text.split('\n').map(line => line.trim()).filter(Boolean).slice(0, 12) } : null,
       jobBody: (() => { const text = readJobBody(this.actions.root(), null); return text ? { length: text.length, lines: text.split('\n').map(line => line.trim()).filter(Boolean).slice(0, 8) } : null; })(),
+      profile: (() => { const source = readProfileSource(this.actions.root(), this.window.location.href, this.window.document.title); return source ? { name: source.name, topLines: source.top.split('\n').map(line => line.trim()).filter(Boolean).slice(0, 12), headings: source.sections.map(section => `${section.heading} (${section.text.length})`) } : null; })(),
       urnBearingElements: loose.length,
       firstCard: sources[0]
         ? { urn: sources[0].urn, textLength: sources[0].text.length, lines: sources[0].text.split('\n').filter(Boolean).length, controlLabels: sources[0].controlLabels.slice(0, 6), hasExternalUrl: !!sources[0].externalUrl }

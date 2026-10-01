@@ -28,6 +28,11 @@ export const readPostSchema = z.strictObject({
 
 export const jobsSchema = z.strictObject({ limit });
 
+export const readProfileSchema = z.strictObject({
+  expect: z.string().max(2048).optional().describe('Optional profile URL or public identifier the tab should be showing. The read fails rather than returning a different person.'),
+  expand,
+});
+
 export const readJobSchema = z.strictObject({
   expect: z.string().max(2048).optional().describe('Optional job URL or numeric ID the tab should be showing. The read fails rather than returning a different job.'),
 });
@@ -36,6 +41,7 @@ export const openSchema = z.strictObject({
   target: z.enum(['feed', 'post', 'profile', 'job', 'search']).default('feed'),
   value: z.string().max(2048).optional().describe('Post URL or URN, profile URL or public identifier, job URL or numeric ID, or search keywords. Omit for the feed.'),
   type: z.enum(['all', 'posts', 'people', 'companies', 'jobs']).default('all').describe('Which search to open. Used only with target "search"; posts finds articles and updates.'),
+  section: z.enum(['experience', 'education', 'skills', 'certifications']).optional().describe('Open one section of a profile on its own page. Used only with target "profile".'),
   network: z.array(z.enum(['1st', '2nd', '3rd'])).min(1).max(3).optional().describe('Keep only people at these connection degrees, e.g. ["1st"] for the member\u2019s own connections. Used only with a people search.'),
 });
 
@@ -45,6 +51,7 @@ export type ReadPostInput = z.infer<typeof readPostSchema>;
 export type OpenInput = z.infer<typeof openSchema>;
 export type JobsInput = z.infer<typeof jobsSchema>;
 export type ReadJobInput = z.infer<typeof readJobSchema>;
+export type ReadProfileInput = z.infer<typeof readProfileSchema>;
 
 function linkedinURL(value: string): URL {
   let url: URL;
@@ -86,6 +93,10 @@ export function normalizeProfile(value: string): string {
   id = id.replace(/^\/?in\//i, '').replace(/\/$/, '');
   if (!/^[A-Za-z0-9\-%_.À-ɏЀ-ӿ]{3,120}$/.test(id)) throw new ToolError('INVALID_INPUT', 'Expected a LinkedIn profile URL or public identifier.');
   return id;
+}
+
+export function profilePath(id: string, section?: OpenInput['section']): string {
+  return `/in/${encodeURIComponent(id)}/${section ? `details/${section}/` : ''}`;
 }
 
 export function postPath(urn: string): string { return `/feed/update/${urn}/`; }

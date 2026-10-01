@@ -322,3 +322,116 @@ export function parseEntity(source: EntitySource): Entity {
 
   return { kind: source.kind, name: name || null, headline, location, detail, followers, degree, url: source.url };
 }
+
+/**
+ * A profile is one person's own page, read the way a screen reader walks it: a heading
+ * names them, and each further heading opens a section. Only the subject's own sections
+ * are kept. The rails beside them ("People also viewed", "Explore Premium profiles")
+ * list other members, and passing those on would turn reading one profile into
+ * collecting many.
+ */
+export interface ProfileSource { url: string; name: string | null; top: string; sections: { heading: string; text: string }[] }
+
+export interface Profile {
+  url: string;
+  name: string | null;
+  degree: string | null;
+  headline: string | null;
+  location: string | null;
+  /** The current employer and school LinkedIn lists beside the top card. */
+  affiliations: string[];
+  connections: string | null;
+  mutual_connections: string | null;
+  about: string | null;
+  sections: { heading: string; lines: string[] }[];
+}
+
+const PROFILE_SECTIONS = /^(activity|experience|education|licenses (&|and) certifications|skills|projects|volunteering|volunteer experience|publications|honors (&|and) awards|languages|courses|organizations|patents|test scores|causes)$/i;
+const PROFILE_TOP_CHROME = /^(contact info|message|connect|follow|following|more|pending|open to|add profile section|enhance profile|resources|verified|view in sales navigator|[•·]|\(?(he\/him|she\/her|they\/them)\)?)$/i;
+const PROFILE_CONNECTIONS = /^[\d,.]+\+?\s+connections?$/i;
+const PROFILE_FOLLOWERS = /^[\d,.]+\+?\s*[KkMm]?\s+followers?$/i;
+const SECTION_CHROME = /^(show all\b.*|…?\s*see more|see less|show (more|less)( .*)?|endorse|endorsed|load more|posts|comments|images|videos|articles|documents|newsletters|events)$/i;
+const MAX_SECTION_LINES = 60;
+const MAX_ACTIVITY_LINES = 25;
+
+/** LinkedIn renders each label twice, once visible and once for screen readers. */
+function dedupeAdjacent(lines: string[]): string[] {
+  return lines.filter((line, index) => index === 0 || line !== lines[index - 1]);
+}
+
+function linesOf(text: string): string[] {
+  return dedupeAdjacent(text.split('\n').map(line => line.trim()).filter(Boolean));
+}
+
+/**
+ * Where the subject's content ends. A details page has no heading elements, so the
+ * suggestion rail and the footer arrive in the same text as the list itself, and each
+ * of those lists other members. Everything from the first of these lines on is dropped.
+ */
+const PROFILE_RAIL = /^(more profiles for you|people also viewed|people you may know|explore premium profiles|you might like|pages for you|other similar profiles)$/i;
+/** Activity items carry their author's degree and an age ("3mo •") above the text. */
+const ACTIVITY_CHROME = /^(\d+\s*(s|m|h|d|w|mo|yr)s?\s*[•·]?(\s*edited\s*[•·]?)?|…\s*more)$/i;
+
+/** Section lines with the heading, its screen-reader repeat, and the controls removed. */
+export function sectionLines(heading: string, text: string, max = MAX_SECTION_LINES): string[] {
+  const lines = linesOf(text);
+  const end = lines.findIndex(line => PROFILE_RAIL.test(line));
+  return (end >= 0 ? lines.slice(0, end) : lines)
+    .filter(line => line !== heading && !SECTION_CHROME.test(line) && !PROFILE_FOLLOWERS.test(line))
+    .filter(line => !DEGREE_ONLY.test(line) && !ACTIVITY_CHROME.test(line))
+    .slice(0, max);
+}
+
+export function parseProfile(source: ProfileSource): Profile {
+  let name = source.name?.trim() || null;
+  let degree: string | null = null;
+  const top = linesOf(source.top);
+
+  // Location sits immediately before "Contact info", often on the same line after a dot.
+  // That anchor is the layout's own; guessing by "has a comma" would take a headline.
+  let location: string | null = null;
+  const contact = top.findIndex(line => /contact info$/i.test(line));
+  if (contact >= 0) {
+    const inline = top[contact]!.replace(/\s*[•·]?\s*contact info$/i, '').trim();
+    // The dot between them is sometimes its own line, so step back over separators.
+    const before = top.slice(0, contact).map(line => line.replace(/^[•·]\s*/, '').trim()).filter(Boolean).at(-1) ?? null;
+    location = inline || before;
+  }
+
+  if (name) {
+    const suffixed = name.match(DEGREE_SUFFIX);
+    if (suffixed) { name = suffixed[1]!.trim(); degree = suffixed[2]!; }
+  }
+
+  let connections: string | null = null;
+  let mutual_connections: string | null = null;
+  const rest: string[] = [];
+  for (const raw of top) {
+    const line = raw.replace(/^[•·]\s*/, '').trim();
+    if (!line || (name && line === name) || line === location) continue;
+    const suffixed = line.match(DEGREE_SUFFIX);
+    if (suffixed && name && suffixed[1]!.trim() === name) { degree = suffixed[2]!; continue; }
+    if (DEGREE_ONLY.test(line)) { degree = line.replace(/^[•·]\s*/, ''); continue; }
+    if (PROFILE_CONNECTIONS.test(line)) { connections = connections ?? line; continue; }
+    if (MUTUALS.test(line)) { mutual_connections = mutual_connections ?? line; continue; }
+    if (/contact info$/i.test(line) || PROFILE_TOP_CHROME.test(line) || PROFILE_FOLLOWERS.test(line)) continue;
+    rest.push(line);
+  }
+
+  let about: string | null = null;
+  const sections: Profile['sections'] = [];
+  for (const section of source.sections) {
+    const heading = section.heading.trim();
+    if (/^about$/i.test(heading)) { about = sectionLines(heading, section.text).join('\n') || null; continue; }
+    if (!PROFILE_SECTIONS.test(heading)) continue;
+    // Activity repeats the person's own name and headline above every item.
+    const lines = sectionLines(heading, section.text, /^activity$/i.test(heading) ? MAX_ACTIVITY_LINES : MAX_SECTION_LINES)
+      .filter(line => line !== name && line !== rest[0]);
+    if (lines.length) sections.push({ heading, lines });
+  }
+
+  return {
+    url: source.url, name, degree, headline: rest[0] ?? null, location,
+    affiliations: rest.slice(1, 4), connections, mutual_connections, about, sections,
+  };
+}

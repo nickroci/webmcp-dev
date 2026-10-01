@@ -1,5 +1,5 @@
 import { fiberFromNode } from './react';
-import { urnInProps, type EntitySource, type JobSource, type PostSource } from './extract';
+import { urnInProps, type EntitySource, type JobSource, type PostSource, type ProfileSource } from './extract';
 
 /**
  * The DOM adapter: finds each rendered post card and the URN identifying it.
@@ -185,6 +185,56 @@ export function jobIdIn(element: Element): string | null {
     if (match) return match[1]!;
   }
   return null;
+}
+
+/**
+ * A profile has no cards to find by shape; it is one document with landmarks. The
+ * person's name is a heading: an h1 on older layouts, an h2 now. Rather than trust either
+ * level, take the heading whose text is the name the page title gives ("Name | LinkedIn").
+ * Each other h2 heads a section, which is the widest ancestor holding no other heading,
+ * so it takes the whole section and never its neighbour's.
+ */
+export function readProfileSource(root: ParentNode, url: string, title: string): ProfileSource | null {
+  const titled = title.split('|')[0]!.trim();
+  const headings = [...root.querySelectorAll('h1, h2')];
+  const nameHeading = headings.find(heading => heading.tagName === 'H1')
+    ?? headings.find(heading => titled && firstLine(heading) === titled)
+    ?? null;
+  if (!nameHeading) return null;
+
+  const sections = headings.filter(heading => heading !== nameHeading && heading.tagName === 'H2').map(heading => ({
+    heading: firstLine(heading),
+    text: textOf(ownSection(heading)),
+  })).filter(section => section.heading);
+
+  return { url, name: firstLine(nameHeading) || null, top: textOf(ownSection(nameHeading)), sections };
+}
+
+/** The About section, the one place on a profile where "see more" only expands text. */
+export function profileAboutSection(root: ParentNode): Element | null {
+  const heading = [...root.querySelectorAll('h2')].find(h2 => /^about$/i.test(firstLine(h2)));
+  return heading ? ownSection(heading) : null;
+}
+
+/** A /details/<section>/ page is one list with no heading element, only its first line. */
+export function readProfileDetails(root: Element): { heading: string; text: string } | null {
+  const text = textOf(root);
+  const heading = text.split('\n').map(line => line.trim()).find(Boolean);
+  return heading ? { heading, text } : null;
+}
+
+function firstLine(element: Element): string {
+  return textOf(element).split('\n')[0]!.trim();
+}
+
+function ownSection(heading: Element): Element {
+  let section = heading;
+  while (section.parentElement && section.parentElement.tagName !== 'MAIN' && section.parentElement.tagName !== 'BODY') {
+    const parent = section.parentElement;
+    if (parent.querySelectorAll('h1, h2').length > 1) break;
+    section = parent;
+  }
+  return section;
 }
 
 function absolute(href: string): string {

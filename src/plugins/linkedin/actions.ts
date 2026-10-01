@@ -15,9 +15,9 @@ export class PageActions {
   private get document(): Document { return this.window.document; }
 
   /** Click the "see more" controls LinkedIn renders on truncated posts. */
-  expandTruncated(limit = 12): number {
+  expandTruncated(limit = 12, scope: ParentNode = this.document): number {
     let clicked = 0;
-    for (const button of this.document.querySelectorAll('button')) {
+    for (const button of scope.querySelectorAll('button')) {
       if (clicked >= limit) break;
       const label = visibleText(button);
       if (!MORE_LABEL.test(label) && !MORE_LABEL.test(button.getAttribute('aria-label') ?? '')) continue;
