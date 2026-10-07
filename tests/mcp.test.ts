@@ -6,19 +6,18 @@ import { WebSocket } from 'ws';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
-import { bridgeConfig } from './bridge-fixtures';
+import { bridgeConfig, MANAGEMENT_TOOLS } from './bridge-fixtures';
 import { startRelay } from '../src/mcp/relay';
 import { RelayClient } from '../src/mcp/client';
 import { createMcpServer } from '../src/mcp/server';
 import type { BridgeConfig } from '../src/mcp/config';
 import type { RemoteTab, SharedTab } from '../src/mcp/protocol';
 import { PluginStore } from '../src/mcp/plugins';
-import { demoFiles } from './plugins.test';
+import { demoFiles } from './plugin-fixtures';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-export const MANAGEMENT_TOOLS = ['webmcp_request_connection', 'webmcp_list_tabs', 'webmcp_select_tab', 'webmcp_refresh_tools', 'webmcp_doctor', 'webmcp_call_tool', 'webmcp_list_plugins', 'webmcp_read_plugin', 'webmcp_install_plugin', 'webmcp_remove_plugin', 'webmcp_evaluate'];
 
 async function browser(config: BridgeConfig) {
   const socket = new WebSocket(`ws://127.0.0.1:${config.port}/browser`, { origin: `chrome-extension://${'a'.repeat(32)}` });

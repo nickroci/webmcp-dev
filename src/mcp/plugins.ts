@@ -56,11 +56,19 @@ export class PluginStore {
     const path = join(this.root, 'src/plugins', id);
     return { plugin: built, path, files: await readFiles(path).catch(() => ({})) };
   }
-  /** Plugins shipped in the extension build, if this checkout has been built. */
+  /** Plugins shipped with the extension: the built catalog when this checkout has been built,
+   * otherwise their manifests under src/plugins, so ids are reserved before any build and in CI. */
   async builtIn(): Promise<PluginCatalogEntry[]> {
     if (!this.staticEntries) {
-      const list = await readFile(join(this.root, 'dist/extension/plugins.json'), 'utf8').then(text => JSON.parse(text) as PluginCatalogEntry[]).catch(() => []);
-      this.staticEntries = list.map(plugin => ({ ...plugin, source: 'static' as const }));
+      const built = await readFile(join(this.root, 'dist/extension/plugins.json'), 'utf8').then(text => JSON.parse(text) as PluginCatalogEntry[]).catch(() => []);
+      const entries = built.map(plugin => ({ ...plugin, source: 'static' as const }));
+      const sources = await readdir(join(this.root, 'src/plugins'), { withFileTypes: true }).catch(() => []);
+      for (const item of sources) {
+        if (!item.isDirectory() || entries.some(plugin => plugin.id === item.name)) continue;
+        const manifest = await readFile(join(this.root, 'src/plugins', item.name, 'plugin.json'), 'utf8').then(text => pluginManifestSchema.safeParse(JSON.parse(text))).catch(() => undefined);
+        if (manifest?.success) { const { $schema: _schema, ...metadata } = manifest.data; entries.push({ ...metadata, file: `plugins/${metadata.id}.js`, source: 'static' as const }); }
+      }
+      this.staticEntries = entries;
     }
     return this.staticEntries;
   }

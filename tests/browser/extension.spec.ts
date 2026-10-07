@@ -10,9 +10,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { startRelay } from '../../src/mcp/relay';
 import { pairingCode } from '../../src/mcp/config';
-import { bridgeConfig } from '../bridge-fixtures';
+import { bridgeConfig, MANAGEMENT_TOOLS } from '../bridge-fixtures';
 import { PluginStore } from '../../src/mcp/plugins';
-import { MANAGEMENT_TOOLS } from '../mcp.test';
 
 // A plugin an agent might write for a site that ships none. The revision marker shows which build a document runs.
 const agentPlugin = (revision: string) => ({
