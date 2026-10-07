@@ -1,7 +1,17 @@
 import type { ToolResult } from '../errors';
 
 export interface PluginManifest { apiVersion: 1; id: string; name: string; version: string; description: string; matches: string[] }
-export interface PluginCatalogEntry extends PluginManifest { file: string }
+/** One installed plugin as the extension knows it: a built-in bundle shipped in the
+ * extension, or an agent-authored one compiled by the local bridge at install time. */
+export interface PluginCatalogEntry extends PluginManifest {
+  file: string;
+  /** Content hash of the plugin source. Lets a running document detect that it holds older code. */
+  revision?: string;
+  source?: 'static' | 'dynamic';
+  installedBy?: string;
+  installedAt?: string;
+  note?: string;
+}
 export interface ExecutionOptions { signal?: AbortSignal }
 export interface ToolDefinition {
   name: string;
@@ -56,9 +66,18 @@ export interface WebMCPDeveloper {
   registerPlugin(plugin: SitePlugin, options?: PluginOptions): PluginAPI;
   unregisterPlugin(id: string): void;
   getPlugin(id: string): PluginAPI | undefined;
-  listPlugins(): Array<PluginManifest & PluginStatus>;
+  listPlugins(): Array<PluginManifest & Partial<Pick<PluginCatalogEntry, 'file' | 'revision' | 'source'>> & PluginStatus>;
   listTools(): RegisteredTool[];
   refreshTools(): Promise<void>;
   callTool(name: string, input: unknown, options?: ExecutionOptions): Promise<ToolResult>;
 }
-declare global { interface Window { webMCPDev?: WebMCPDeveloper; redditWebMCP?: PluginAPI } }
+declare global {
+  interface Window {
+    webMCPDev?: WebMCPDeveloper;
+    redditWebMCP?: PluginAPI;
+    /** Activation errors recorded by plugin bundles, keyed by plugin id, for the extension to read back. */
+    __webMCPDevErrors?: Record<string, string>;
+    /** Pending results of agent code evaluated in this document, keyed by request. */
+    __webMCPDevEval?: Record<string, Promise<string>>;
+  }
+}

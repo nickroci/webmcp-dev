@@ -12,6 +12,13 @@ import { RelayClient } from '../src/mcp/client';
 import { createMcpServer } from '../src/mcp/server';
 import type { BridgeConfig } from '../src/mcp/config';
 import type { RemoteTab, SharedTab } from '../src/mcp/protocol';
+import { PluginStore } from '../src/mcp/plugins';
+import { demoFiles } from './plugins.test';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+export const MANAGEMENT_TOOLS = ['webmcp_request_connection', 'webmcp_list_tabs', 'webmcp_select_tab', 'webmcp_refresh_tools', 'webmcp_doctor', 'webmcp_call_tool', 'webmcp_list_plugins', 'webmcp_read_plugin', 'webmcp_install_plugin', 'webmcp_remove_plugin', 'webmcp_evaluate'];
 
 async function browser(config: BridgeConfig) {
   const socket = new WebSocket(`ws://127.0.0.1:${config.port}/browser`, { origin: `chrome-extension://${'a'.repeat(32)}` });
@@ -40,7 +47,7 @@ test('MCP dynamically exposes site schemas, wraps root values, and keeps indepen
   client.setNotificationHandler(ToolListChangedNotificationSchema, () => { changed++; });
   try {
     await server.connect(a); await client.connect(b);
-    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ['webmcp_request_connection', 'webmcp_list_tabs', 'webmcp_select_tab', 'webmcp_refresh_tools', 'webmcp_doctor', 'webmcp_call_tool']);
+    assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), MANAGEMENT_TOOLS);
     chrome.send(JSON.stringify({ type: 'snapshot', tabs: [sample] }));
     const [tab] = await waitTabs(connection);
     await client.callTool({ name: 'webmcp_select_tab', arguments: { tab: tab.key } });
@@ -58,11 +65,11 @@ test('MCP dynamically exposes site schemas, wraps root values, and keeps indepen
     const secondServer = createMcpServer(secondConnection); const second = new Client({ name: 'second', version: '1' });
     const [c, d] = InMemoryTransport.createLinkedPair();
     await secondServer.connect(c); await second.connect(d);
-    assert.equal((await second.listTools()).tools.length, 6);
+    assert.equal((await second.listTools()).tools.length, MANAGEMENT_TOOLS.length);
     await second.close(); await secondServer.close(); secondConnection.close();
     chrome.send(JSON.stringify({ type: 'snapshot', tabs: [] }));
     await waitTabs(connection, 0);
-    assert.equal((await client.listTools()).tools.length, 6);
+    assert.equal((await client.listTools()).tools.length, MANAGEMENT_TOOLS.length);
     assert.ok(changed > 0);
   } finally { await client.close(); await server.close(); connection.close(); chrome.close(); await relay.close(); }
 });
@@ -86,14 +93,14 @@ test('doctor names a stale document and the only remedy for it', async () => {
     const bad = await report();
     assert.equal(bad.healthy, false);
     assert.equal(bad.tabs[0].stale, true);
-    assert.deepEqual(bad.tabs[0].plugins, [{ id: 'fixture', name: 'Fixture', running: '0.4.0', installed: '0.5.0', stale: true }]);
-    // The remedy must say a new tab: an extension reload cannot re-inject an open document.
-    assert.match(bad.problems.join(' '), /NEW tab/);
+    assert.deepEqual(bad.tabs[0].plugins, [{ id: 'fixture', name: 'Fixture', source: null, running: '0.4.0', installed: '0.5.0', stale: true }]);
+    // The extension re-runs the installed bundle itself; the remedy is to check again, not to open a new tab.
+    assert.match(bad.problems.join(' '), /re-injects the installed revision/);
 
     const fresh: SharedTab = { ...sample, runtimeVersion: '0.3.0', plugins: [{ id: 'fixture', name: 'Fixture', version: '0.5.0', expected: '0.5.0', stale: false }] };
     chrome.send(JSON.stringify({ type: 'snapshot', tabs: [] }));
     await waitTabs(connection, 0);
-    chrome.send(JSON.stringify({ type: 'snapshot', tabs: [fresh] }));
+    chrome.send(JSON.stringify({ type: 'snapshot', tabs: [fresh], capabilities: { devMode: true, userScripts: true, extensionVersion: '0.6.0' } }));
     const [tab] = await waitTabs(connection);
     await client.callTool({ name: 'webmcp_select_tab', arguments: { tab: tab.key } });
     const good = await report();
@@ -151,4 +158,72 @@ test('relay requires role-specific credentials and rejects website origins', asy
     unauthenticated.send(JSON.stringify({ type: 'hello', version: 1, token: 'é'.repeat(64) }));
     assert.equal((await once(unauthenticated, 'close'))[0], 1008);
   } finally { await relay.close(); }
+});
+
+test('agents install, read, evaluate against and remove plugins through the relay, gated by the browser’s dev mode', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'webmcp-mcp-plugins-'));
+  const store = new PluginStore(join(dir, 'plugins')); await store.load();
+  const config = await bridgeConfig(); const relay = await startRelay(config, { store });
+  const received: any[] = [];
+  const chrome = new WebSocket(`ws://127.0.0.1:${config.port}/browser`, { origin: `chrome-extension://${'a'.repeat(32)}` });
+  chrome.on('message', raw => {
+    const message = JSON.parse(raw.toString()); received.push(message);
+    if (message.type === 'install') chrome.send(JSON.stringify({ type: 'reply', id: message.id, result: { ok: true, tabs: [{ tabId: 9, url: 'https://demo.test/page', shared: true, ok: true, tools: ['demo_site_hello'] }] } }));
+    if (message.type === 'call' && message.call.code) chrome.send(JSON.stringify({ type: 'result', id: message.id, result: { ok: true, data: { title: 'Demo page', length: message.call.code.length } } }));
+  });
+  await once(chrome, 'open');
+  chrome.send(JSON.stringify({ type: 'hello', version: 1, token: config.browserToken, browserId: randomUUID() }));
+  const connection = await RelayClient.connect(config);
+  const server = createMcpServer(connection); const client = new Client({ name: 'builder-agent', version: '1' });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const call = async (name: string, args: Record<string, unknown> = {}) => {
+    const response = await client.callTool({ name, arguments: args });
+    return JSON.parse((response.content as Array<{ text: string }>)[0].text) as { ok: boolean; data: any; error?: { code: string; message: string; details?: unknown } };
+  };
+  try {
+    await server.connect(a); await client.connect(b);
+    // Right after ready, every browser receives the full catalog: empty for now.
+    for (let attempt = 0; attempt < 100 && !received.some(message => message.type === 'catalog'); attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(received.map(message => message.type), ['ready', 'catalog']);
+    assert.deepEqual(received[1].plugins, []);
+    chrome.send(JSON.stringify({ type: 'snapshot', tabs: [{ ...sample, url: 'https://demo.test/page', tools: [] }], capabilities: { devMode: false, userScripts: true, extensionVersion: '0.6.0' } }));
+    const [tab] = await waitTabs(connection);
+    await client.callTool({ name: 'webmcp_select_tab', arguments: { tab: tab.key } });
+    const refused = await call('webmcp_install_plugin', { files: demoFiles() });
+    assert.equal(refused.error?.code, 'DEV_MODE_DISABLED');
+    assert.match((await call('webmcp_doctor')).data.problems.join(' '), /Let agents develop plugins/);
+    assert.deepEqual(await readdir(join(dir, 'plugins')), []);
+
+    chrome.send(JSON.stringify({ type: 'snapshot', tabs: [{ ...sample, url: 'https://demo.test/page', tools: [] }], capabilities: { devMode: true, userScripts: true, extensionVersion: '0.6.0' } }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal((await call('webmcp_doctor')).data.healthy, true);
+    const bad = await call('webmcp_install_plugin', { files: { ...demoFiles(), 'index.ts': 'export const plugin = {' }, note: 'broken' });
+    assert.equal(bad.error?.code, 'COMPILE_ERROR');
+    const installed = await call('webmcp_install_plugin', { files: demoFiles('hi'), note: 'first cut' });
+    assert.equal(installed.ok, true, JSON.stringify(installed));
+    assert.equal(installed.data.plugin.id, 'demo-site');
+    assert.equal(installed.data.plugin.installedBy, 'builder-agent');
+    assert.equal(installed.data.plugin.code, undefined);
+    assert.deepEqual(installed.data.browsers[0].tabs[0].tools, ['demo_site_hello']);
+    const pushed = received.find(message => message.type === 'install');
+    assert.equal(pushed.plugin.id, 'demo-site');
+    assert.match(pushed.plugin.code, /demo_site_hello/);
+    assert.deepEqual(await readdir(join(dir, 'plugins')), ['demo-site']);
+    const listed = await call('webmcp_list_plugins');
+    assert.ok(listed.data.plugins.some((plugin: { id: string; source: string; note?: string }) => plugin.id === 'demo-site' && plugin.source === 'dynamic' && plugin.note === 'first cut'));
+    const read = await call('webmcp_read_plugin', { id: 'demo-site' });
+    assert.equal(read.data.files['index.ts'], demoFiles('hi')['index.ts']);
+    assert.equal(read.data.path, join(dir, 'plugins/demo-site'));
+    const evaluated = await call('webmcp_evaluate', { code: 'return { title: document.title };' });
+    assert.deepEqual(evaluated.data, { title: 'Demo page', length: 'return { title: document.title };'.length });
+    const syntax = await call('webmcp_evaluate', { code: 'return {' });
+    assert.equal(syntax.error?.code, 'INVALID_INPUT');
+    assert.match(syntax.error!.message, /Syntax error/);
+    const removed = await call('webmcp_remove_plugin', { id: 'demo-site' });
+    assert.deepEqual(removed.data, { removed: true });
+    assert.deepEqual(await readdir(join(dir, 'plugins')), []);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(received.some(message => message.type === 'remove' && message.pluginId === 'demo-site'));
+    assert.equal((await call('webmcp_remove_plugin', { id: 'reddit' })).error?.code, 'UNKNOWN_PLUGIN');
+  } finally { await client.close(); await server.close(); connection.close(); chrome.close(); await relay.close(); await rm(dir, { recursive: true, force: true }); }
 });

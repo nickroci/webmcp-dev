@@ -11,6 +11,21 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { startRelay } from '../../src/mcp/relay';
 import { pairingCode } from '../../src/mcp/config';
 import { bridgeConfig } from '../bridge-fixtures';
+import { PluginStore } from '../../src/mcp/plugins';
+import { MANAGEMENT_TOOLS } from '../mcp.test';
+
+// A plugin an agent might write for a site that ships none. The revision marker shows which build a document runs.
+const agentPlugin = (revision: string) => ({
+  'plugin.json': JSON.stringify({ apiVersion: 1, id: 'unsupported', name: 'Unsupported Site', version: '0.1.0', description: 'Built by an agent during the test.', matches: ['https://unsupported.test/*'] }, null, 2),
+  'index.ts': `import { definePlugin, defineTool, z } from '@webmcp-dev/sdk';
+import manifest from './plugin.json';
+export const plugin = definePlugin({ manifest, setup({ window }) { return { tools: [defineTool({
+  name: 'unsupported_heading', title: 'Read heading', description: 'Read the page heading.', schema: z.strictObject({}),
+  annotations: { readOnlyHint: true, consequentialHint: false, untrustedContentHint: true },
+  execute: () => ({ heading: window.document.querySelector('h1')?.textContent ?? null, revision: ${JSON.stringify(revision)} }),
+})] }; } });
+`,
+});
 
 let context: BrowserContext;
 let profile: string;
@@ -29,6 +44,13 @@ test.beforeAll(async () => {
   });
   const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker');
   extensionId = new URL(worker.url()).hostname;
+  // Chrome gates chrome.userScripts behind a per-extension toggle. Enable it the way a user would.
+  const settings = await context.newPage();
+  await settings.goto(`chrome://extensions/?id=${extensionId}`);
+  const allowUserScripts = settings.locator('extensions-toggle-row#allow-user-scripts cr-toggle');
+  if (!await allowUserScripts.evaluate(element => (element as HTMLElement & { checked: boolean }).checked)) await allowUserScripts.click();
+  await expect(allowUserScripts).toHaveJSProperty('checked', true);
+  await settings.close();
   // No request in these tests reaches Reddit, including POST /api/submit.
   await context.route('https://*.reddit.com/**', async route => {
     const request = route.request();
@@ -49,7 +71,7 @@ test.beforeAll(async () => {
     return route.fulfill({ contentType: 'text/html', headers: { 'Content-Security-Policy': "default-src 'self'; script-src 'self'; connect-src 'self'" }, body: '<!doctype html><html><head><title>Reddit fixture</title></head><body><h1>Reddit fixture</h1></body></html>' });
   });
   await context.route('https://example.test/**', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Example fixture</title><h1>Another site</h1>' }));
-  await context.route('https://unsupported.test/**', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>No plugin</title><h1>Unsupported site</h1>' }));
+  await context.route('https://unsupported.test/**', route => route.fulfill({ contentType: 'text/html', headers: { 'Content-Security-Policy': "default-src 'self'; script-src 'self'" }, body: '<!doctype html><title>No plugin</title><h1>Unsupported site</h1>' }));
 });
 test.afterAll(async () => { await context?.close(); if (profile) await rm(profile, { recursive: true, force: true }); });
 
@@ -97,6 +119,7 @@ test('generic popup lists and creates Reddit posts using generated forms', async
   // A real popup does not become the active browser tab. Reload it while the target tab is active.
   await page.bringToFront();
   await popup.reload();
+  await popup.getByRole('button', { name: 'Tools', exact: true }).click();
   await expect(popup.locator('#tool-count')).toHaveText('7 tools available.');
   await popup.getByRole('button', { name: 'List posts', exact: true }).click();
   await expect(popup.locator('#result')).toContainText('A test post <script>not HTML</script>');
@@ -122,6 +145,7 @@ test('reply forms publish to the intended post or comment and preserve deduplica
     await page.waitForFunction(() => !!window.redditWebMCP);
     await popup.goto(`chrome-extension://${extensionId}/popup.html`);
     await page.bringToFront(); await popup.reload();
+    await popup.getByRole('button', { name: 'Tools', exact: true }).click();
     await popup.locator('#tool').selectOption('reddit_reply');
     await popup.locator('[name=parent_id]').fill('t3_abc123');
     await popup.locator('[name=text]').fill('A top-level fixture reply');
@@ -155,6 +179,7 @@ test('a separate site package supplies structured input types and dynamic tools'
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
   await page.bringToFront(); await popup.reload();
+  await popup.getByRole('button', { name: 'Tools', exact: true }).click();
   await expect(popup.locator('#tool-count')).toHaveText('2 tools available.');
   await popup.locator('#run').click();
   await expect(popup.locator('#result')).toContainText('Example fixture');
@@ -218,7 +243,7 @@ test('unsupported pages get no injection and still show the plugin catalog', asy
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
   await page.bringToFront(); await popup.reload();
-  await expect(popup.locator('#status')).toHaveText('No installed plugin matches this page.');
+  await expect(popup.locator('#status')).toContainText('No installed plugin matches this page.');
   expect(await page.evaluate(() => window.webMCPDev)).toBeUndefined();
   await popup.getByRole('button', { name: 'Site plugins', exact: true }).click();
   // Every installed plugin is listed by name, even on a page none of them inject into.
@@ -257,11 +282,13 @@ test('registers in document.modelContext with the current contract and supports 
   await page.close();
 });
 
-test('an actual stdio MCP client requests approval in the extension, navigates visible pages, and discovers dynamic tools', async () => {
+test('an actual stdio MCP client requests approval in the extension, navigates visible pages, discovers dynamic tools, and builds a plugin for a site that has none', async () => {
+  test.setTimeout(120_000);
   const config = await bridgeConfig();
   const stateDir = await mkdtemp(join(tmpdir(), 'webmcp-bridge-e2e-'));
   await writeFile(join(stateDir, 'connection.json'), JSON.stringify(config), { mode: 0o600 });
-  const relay = await startRelay(config);
+  const store = new PluginStore(join(stateDir, 'plugins')); await store.load();
+  const relay = await startRelay(config, { store });
   const client = new Client({ name: 'browser-test-agent', version: '1' });
   const transport = new StdioClientTransport({ command: process.execPath, args: [resolve('dist/mcp/cli.js')], env: { WEBMCP_STATE_DIR: stateDir }, stderr: 'pipe' });
   const page = await context.newPage();
@@ -369,10 +396,68 @@ test('an actual stdio MCP client requests approval in the extension, navigates v
     await expect.poll(async () => (await client.listTools()).tools.some(tool => tool.name === 'fixture_extra')).toBe(true);
     expect((await call('fixture_extra')).data).toBe('expanded');
     expect((await call('webmcp_call_tool', { tool: 'fixture_echo', input: echo })).data).toEqual(echo);
+
+    // A site with no plugin: share it anyway, probe it, build a plugin, and improve it in the same document.
+    await page.goto('https://unsupported.test/');
+    await expect.poll(async () => (await call('webmcp_list_tabs')).data.tabs.length).toBe(0);
+    await page.bringToFront(); await popup.reload();
+    await popup.getByRole('button', { name: 'Agents', exact: true }).click();
+    await popup.getByRole('button', { name: 'Share this tab', exact: true }).click();
+    await expect.poll(async () => (await call('webmcp_list_tabs')).data.tabs.length).toBe(1);
+    const bare = (await call('webmcp_list_tabs')).data.tabs[0];
+    expect(bare.tools).toEqual([]);
+    await call('webmcp_select_tab', { tab: bare.key });
+    expect((await call('webmcp_install_plugin', { files: agentPlugin('v1') })).error?.code).toBe('DEV_MODE_DISABLED');
+    expect((await call('webmcp_evaluate', { code: 'return 1;' })).error?.code).toBe('DEV_MODE_DISABLED');
+    expect((await call('webmcp_doctor')).data.problems.join(' ')).toContain('Let agents develop plugins');
+    await popup.getByRole('checkbox', { name: 'Let agents develop plugins' }).check();
+    await expect.poll(async () => (await call('webmcp_doctor')).data.healthy).toBe(true);
+    const probe = await call('webmcp_evaluate', { code: 'return { title: document.title, heading: document.querySelector("h1")?.textContent, runtime: typeof window.webMCPDev };' });
+    expect(probe.data).toEqual({ title: 'No plugin', heading: 'Unsupported site', runtime: 'undefined' });
+    expect((await call('webmcp_evaluate', { code: 'throw new Error("probe failed");' })).error).toMatchObject({ code: 'EVALUATION_ERROR', message: 'probe failed' });
+    expect((await call('webmcp_evaluate', { code: 'return await Promise.resolve(location.pathname);' })).data).toBe('/');
+    const installed = await call('webmcp_install_plugin', { files: agentPlugin('v1'), note: 'first cut' });
+    expect(installed.ok, JSON.stringify(installed)).toBe(true);
+    expect(installed.data.plugin).toMatchObject({ id: 'unsupported', source: 'dynamic', installedBy: 'browser-test-agent', note: 'first cut' });
+    expect(installed.data.browsers[0].tabs, JSON.stringify(installed)).toEqual([expect.objectContaining({ url: 'https://unsupported.test/', shared: true, ok: true, tools: ['unsupported_heading'] })]);
+    expect(installed.data.selected_tab.tools).toEqual(['unsupported_heading']);
+    await expect.poll(async () => (await client.listTools()).tools.some(tool => tool.name === 'unsupported_heading')).toBe(true);
+    expect((await call('unsupported_heading')).data).toEqual({ heading: 'Unsupported site', revision: 'v1' });
+    const documentBefore = (await call('webmcp_list_tabs')).data.tabs[0].documentId;
+    const updated = await call('webmcp_install_plugin', { files: agentPlugin('v2'), note: 'second cut' });
+    expect(updated.ok, JSON.stringify(updated)).toBe(true);
+    // The open document now runs the new revision: no reload, no new tab.
+    expect((await call('webmcp_list_tabs')).data.tabs[0].documentId).toBe(documentBefore);
+    expect((await call('unsupported_heading')).data).toEqual({ heading: 'Unsupported site', revision: 'v2' });
+    expect((await call('webmcp_doctor')).data.tabs[0].plugins).toEqual([expect.objectContaining({ id: 'unsupported', source: 'dynamic', stale: false })]);
+    // The source is on disk for people and other agents, and the popup shows where it came from.
+    expect(JSON.parse(await readFile(join(stateDir, 'plugins/unsupported/plugin.json'), 'utf8')).id).toBe('unsupported');
+    const catalog = await call('webmcp_list_plugins');
+    expect(catalog.data.plugins.find((plugin: { id: string }) => plugin.id === 'unsupported')).toMatchObject({ installedBy: 'browser-test-agent', note: 'second cut' });
+    expect((await call('webmcp_read_plugin', { id: 'unsupported' })).data.files['index.ts']).toBe(agentPlugin('v2')['index.ts']);
+    expect((await call('webmcp_read_plugin', { id: 'reddit' })).data.path).toBe(resolve('src/plugins/reddit'));
+    await popup.reload();
+    await popup.getByRole('button', { name: 'Site plugins', exact: true }).click();
+    await expect(popup.locator('#plugins')).toContainText('Installed by browser-test-agent');
+    await expect(popup.locator('#plugins')).toContainText('second cut');
+    await popup.screenshot({ path: 'test-results/agent-plugin.png', fullPage: true });
+    // A fresh page load activates the plugin through Chrome's registered user script, without the extension worker.
+    await page.goto('https://unsupported.test/other');
+    await page.waitForFunction(() => window.webMCPDev?.listTools().length === 1);
+    await expect.poll(async () => (await call('webmcp_refresh_tools')).data.tab?.url).toBe('https://unsupported.test/other');
+    expect((await call('unsupported_heading')).data.revision).toBe('v2');
+    expect((await call('webmcp_remove_plugin', { id: 'unsupported' })).data).toEqual({ removed: true });
+    await page.waitForFunction(() => window.webMCPDev?.listTools().length === 0);
+    await expect.poll(async () => (await call('webmcp_list_tabs')).data.tabs[0].tools).toEqual([]);
+    await page.goto('https://unsupported.test/');
+    await page.waitForLoadState('load');
+    expect(await page.evaluate(() => window.webMCPDev)).toBeUndefined();
+    await popup.reload();
+    await popup.getByRole('button', { name: 'Agents', exact: true }).click();
     await popup.screenshot({ path: 'test-results/agents.png', fullPage: true });
     await popup.getByRole('button', { name: 'Stop sharing this tab', exact: true }).click();
     await expect.poll(async () => (await call('webmcp_list_tabs')).data.tabs.length).toBe(0);
-    expect((await call('fixture_page_info')).error?.code).toBe('NO_TAB_SELECTED');
+    expect((await call('webmcp_evaluate', { code: 'return 1;' })).error?.code).toBe('NO_TAB_SELECTED');
     await popup.getByRole('button', { name: 'Disconnect', exact: true }).click();
   } finally {
     await client.close(); await transport.close(); await popup.close(); await page.close();
@@ -391,7 +476,7 @@ test('MCP adapters automatically start and reuse the local relay without a termi
   const run = promisify(execFile);
   try {
     await Promise.all(clients.map((client, index) => client.connect(transports[index])));
-    for (const client of clients) expect((await client.listTools()).tools.length).toBe(6);
+    for (const client of clients) expect((await client.listTools()).tools.length).toBe(MANAGEMENT_TOOLS.length);
     const config = JSON.parse(await readFile(join(stateDir, 'connection.json'), 'utf8'));
     expect(config.port).toBe(port);
     expect((await stat(join(stateDir, 'connection.json'))).mode & 0o777).toBe(0o600);

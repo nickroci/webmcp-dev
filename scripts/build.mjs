@@ -2,6 +2,18 @@ import { build } from 'esbuild';
 import { cp, mkdir, rm, readdir, readFile, writeFile, access } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { bootstrap, revisionOf } from '../src/core/bundle.mjs';
+
+// Content hash of the plugin folder: a document compares it with the installed one to replace older code.
+async function revisionOfFolder(dir) {
+  const files = {};
+  for (const item of await readdir(dir, { withFileTypes: true, recursive: true })) {
+    if (!item.isFile() || item.name.startsWith('.')) continue;
+    const path = join(item.parentPath ?? item.path, item.name);
+    files[path.slice(dir.length + 1)] = await readFile(path, 'utf8');
+  }
+  return revisionOf(files);
+}
 
 const { values } = parseArgs({ options: { outdir: { type: 'string', default: 'dist' }, 'extra-plugin': { type: 'string', multiple: true, default: [] } } });
 const out = resolve(values.outdir);
@@ -21,7 +33,7 @@ for (const dir of dirs.sort()) {
   const entry = resolve(dir, 'index.ts');
   await access(entry);
   const { $schema, ...metadata } = manifest;
-  catalog.push({ ...metadata, file: `plugins/${manifest.id}.js` });
+  catalog.push({ ...metadata, file: `plugins/${manifest.id}.js`, revision: await revisionOfFolder(resolve(dir)) });
   entries.push(entry);
 }
 await rm(out, { recursive: true, force: true });
@@ -31,10 +43,7 @@ await build({ ...options, entryPoints: ['src/index.ts'], outfile: join(out, 'ind
 await build({ ...options, entryPoints: ['src/sdk.ts'], outfile: join(out, 'sdk.js'), format: 'esm' });
 await build({ ...options, entryPoints: ['src/inject.ts'], outfile: join(out, 'reddit-webmcp.js'), format: 'iife' });
 for (let i = 0; i < catalog.length; i++) {
-  await build({ ...options, stdin: {
-    contents: `import {activatePlugin} from './src/core/runtime'; import {plugin} from ${JSON.stringify(entries[i])}; const manifest = ${JSON.stringify(catalog[i])}; try { const api = activatePlugin({...plugin, manifest}); if(manifest.id === 'reddit') window.redditWebMCP = api; } catch(error) { console.error('[WebMCP Dev]', error); }`,
-    resolveDir: resolve('.'), loader: 'ts',
-  }, outfile: join(out, 'extension', catalog[i].file), format: 'iife' });
+  await build({ ...options, stdin: { contents: bootstrap(resolve('src/core/runtime.ts'), entries[i], catalog[i]), resolveDir: resolve('.'), loader: 'ts' }, outfile: join(out, 'extension', catalog[i].file), format: 'iife' });
 }
 for (const name of ['popup', 'background', 'loader']) {
   await build({ ...options, entryPoints: [`extension/${name}.ts`], outfile: join(out, `extension/${name}.js`), format: name === 'background' ? 'esm' : 'iife' });
@@ -42,7 +51,8 @@ for (const name of ['popup', 'background', 'loader']) {
 for (const file of ['popup.html', 'popup.css']) await cp(`extension/${file}`, join(out, 'extension', file));
 const base = JSON.parse(await readFile('extension/manifest.json', 'utf8'));
 const matches = [...new Set(catalog.flatMap(plugin => plugin.matches))];
-const manifest = { ...base, host_permissions: [...matches, 'http://127.0.0.1/*'],
+// Agent-installed plugins can target any site, so the base manifest asks for all hosts; built-in matches still drive the loader.
+const manifest = { ...base, host_permissions: base.host_permissions ?? [...matches, 'http://127.0.0.1/*'],
   content_scripts: [{ matches, js: ['loader.js'], run_at: 'document_idle', all_frames: false }],
 };
 await writeFile(join(out, 'extension/manifest.json'), JSON.stringify(manifest, null, 2));

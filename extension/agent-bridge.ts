@@ -1,24 +1,34 @@
-import { matchesSite } from '../src/core/matches';
 import { z } from 'zod';
 import type { PluginCatalogEntry } from '../src/core/types';
-import { bridgeError, callSchema, pairingSchema, PROTOCOL_VERSION, type PageCall, type SharedTab } from '../src/mcp/protocol';
+import { bridgeError, callSchema, pairingSchema, pluginBundleSchema, PROTOCOL_VERSION, type Activation, type BridgeResult, type BrowserCapabilities, type PageCall, type PluginBundle, type SharedTab } from '../src/mcp/protocol';
+import type { SyncResult } from './background';
 import { createDiscovery } from './discovery';
+import { deleteDynamicPlugin, devModeEnabled, dynamicPlugins, reconcileUserScripts, saveDynamicPlugins, userScriptsAvailable } from './dynamic';
+
+export const WORKER_VERSION = '0.6.0';
+const EVALUATION_LIMIT = 200_000;
+const DEV_MODE_OFF = 'Agent plugin development is off. Ask the user to enable "Let agents develop plugins" in WebMCP Dev → Agents.';
+const USER_SCRIPTS_OFF = 'Chrome has not allowed user scripts for this extension. Ask the user to turn on Allow User Scripts on the extension’s details page in chrome://extensions. It takes effect at once.';
+const isWebPage = (url: string | undefined): url is string => /^https?:/.test(url ?? '');
 
 /** Runs only in the extension worker. Pairing credentials never enter the page. */
-export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab: (tabId: number) => Promise<unknown>) {
+export function startAgentBridge(catalog: () => Promise<PluginCatalogEntry[]>, syncTab: (tabId: number) => Promise<SyncResult>) {
   let socket: WebSocket | undefined;
   let connected = false;
   let status = 'Not paired';
   let shared: Record<string, string> = {};
   let snapshot: SharedTab[] = [];
+  let snapshotSignature = '';
   let snapshotting = false;
   let connecting = false;
   let reconnect: ReturnType<typeof setTimeout> | undefined;
   const running = new Map<string, PageCall>();
+  const healed = new Set<string>();
   const discovery = createDiscovery();
   const ready = chrome.storage.session.get('sharedTabs').then(value => { shared = z.record(z.string(), z.string()).catch({}).parse(value.sharedTabs); });
   const send = (message: unknown) => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message)); };
   const saveSharing = () => chrome.storage.session.set({ sharedTabs: shared });
+  const capabilities = async (): Promise<BrowserCapabilities> => ({ devMode: await devModeEnabled(), userScripts: userScriptsAvailable(), extensionVersion: chrome.runtime.getManifest().version });
 
   async function inspect(tabId: number): Promise<SharedTab | undefined> {
     const origin = shared[String(tabId)]; if (!origin) return;
@@ -32,20 +42,28 @@ export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab
       if (window.navigation?.transition) return;
       const url = location.href;
       const runtime = window.webMCPDev;
-      if (!runtime) return;
+      // A shared page without any plugin is still a shared page: an agent may be about to build one.
+      if (!runtime) return { url, title: document.title, tools: [], plugins: [] };
       await Promise.all(runtime.listPlugins().map(plugin => runtime.getPlugin(plugin.id)!.ready));
       await runtime.refreshTools();
       if (window.navigation?.transition || location.href !== url) return;
-      return { url, title: document.title, tools: runtime.listTools(), runtimeVersion: runtime.version, plugins: runtime.listPlugins().map(plugin => ({ id: plugin.id, name: plugin.name, version: plugin.version })) };
+      return { url, title: document.title, tools: runtime.listTools(), runtimeVersion: runtime.version, plugins: runtime.listPlugins().map(plugin => ({ id: plugin.id, name: plugin.name, version: plugin.version, revision: plugin.revision })) };
     } });
     const frame = results[0];
     if (!frame?.result || !frame.documentId || shared[String(tabId)] !== origin || new URL(frame.result.url).origin !== origin) return;
     // Only here are both versions visible: what this document runs, and what the extension installed.
-    const installed = await catalog;
+    const installed = await catalog();
     const plugins = (frame.result.plugins ?? []).map(plugin => {
-      const expected = installed.find(entry => entry.id === plugin.id)?.version;
-      return { ...plugin, ...(expected ? { expected } : {}), stale: !!expected && expected !== plugin.version };
+      const expected = installed.find(entry => entry.id === plugin.id);
+      const stale = !!expected && (expected.revision ? expected.revision !== plugin.revision : expected.version !== plugin.version);
+      return { ...plugin, ...(expected?.source ? { source: expected.source } : {}), ...(expected ? { expected: expected.version } : {}), ...(expected?.revision ? { expectedRevision: expected.revision } : {}), stale };
     });
+    // A document keeps the revision it loaded. Re-run the installed bundles once per document and
+    // revision; they replace older copies of themselves, so no reload or new tab is needed.
+    if (plugins.some(plugin => plugin.stale)) {
+      const key = `${frame.documentId}:${plugins.filter(plugin => plugin.stale).map(plugin => plugin.expectedRevision ?? plugin.expected).join(',')}`;
+      if (!healed.has(key)) { if (healed.size > 500) healed.clear(); healed.add(key); void syncTab(tabId).catch(() => {}); }
+    }
     return { tabId, documentId: frame.documentId, ...frame.result, plugins };
   }
   async function publish() {
@@ -55,7 +73,9 @@ export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab
     try {
       const results = await Promise.allSettled(Object.keys(shared).map(id => inspect(Number(id))));
       const next = results.flatMap(result => result.status === 'fulfilled' && result.value ? [result.value] : []);
-      if (JSON.stringify(next) !== JSON.stringify(snapshot)) { snapshot = next; send({ type: 'snapshot', tabs: snapshot }); }
+      const able = await capabilities();
+      const signature = JSON.stringify({ next, able });
+      if (signature !== snapshotSignature) { snapshot = next; snapshotSignature = signature; send({ type: 'snapshot', tabs: snapshot, capabilities: able }); }
     } finally { snapshotting = false; }
   }
   async function cancel(id: string) {
@@ -63,6 +83,46 @@ export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab
     await chrome.scripting.executeScript({ target: { tabId: call.tabId, documentIds: [call.documentId] }, world: 'MAIN', args: [id],
       func: (id: string) => window.webMCPDev?.cancelRequest(id),
     }).catch(() => {});
+  }
+  async function evaluate(id: string, call: PageCall & { code: string }): Promise<BridgeResult> {
+    if (!(await devModeEnabled())) return bridgeError('DEV_MODE_DISABLED', DEV_MODE_OFF);
+    if (!userScriptsAvailable()) return bridgeError('USER_SCRIPTS_UNAVAILABLE', USER_SCRIPTS_OFF);
+    const key = `eval-${id}`;
+    // The script's completion value is this promise; Chrome awaits it and hands back the string.
+    const wrapped = `(window.__webMCPDevEval ??= {})[${JSON.stringify(key)}] = (async () => {
+  try {
+    const value = await (async () => {\n${call.code}\n})();
+    let text;
+    try { text = JSON.stringify(value === undefined ? null : value) ?? 'null'; }
+    catch (error) { return JSON.stringify({ ok: false, error: { code: 'NOT_SERIALIZABLE', message: 'The result is not JSON-serializable: ' + String(error) } }); }
+    return JSON.stringify(text.length > ${EVALUATION_LIMIT} ? { ok: true, truncated: true, text: text.slice(0, ${EVALUATION_LIMIT}) } : { ok: true, text });
+  } catch (error) {
+    return JSON.stringify({ ok: false, error: { code: 'EVALUATION_ERROR', message: error instanceof Error ? error.message : String(error), details: error instanceof Error && error.stack ? error.stack.split('\\n').slice(0, 6).join('\\n') : undefined } });
+  }
+})();`;
+    const target = { tabId: call.tabId, documentIds: [call.documentId] };
+    const timeout = new Promise<BridgeResult>(resolve => setTimeout(() => resolve(bridgeError('EVALUATION_TIMEOUT', 'The code did not finish within 30 seconds. Return sooner, or move long work into a plugin tool that honors its AbortSignal.')), 30_000));
+    const run = (async (): Promise<BridgeResult> => {
+      let raw: unknown;
+      try {
+        const [frame] = await chrome.userScripts.execute({ target, world: 'MAIN', js: [{ code: wrapped }] });
+        if (frame?.error) return bridgeError('EVALUATION_ERROR', frame.error);
+        raw = frame?.result;
+      } catch (error) { return bridgeError('EVALUATION_ERROR', error instanceof Error ? error.message : String(error)); }
+      if (typeof raw !== 'string') {
+        const [frame] = await chrome.scripting.executeScript({ target, world: 'MAIN', args: [key], func: async (key: string) => {
+          const pending = window.__webMCPDevEval?.[key];
+          return pending ? await pending : undefined;
+        } });
+        raw = frame?.result;
+      }
+      void chrome.scripting.executeScript({ target, world: 'MAIN', args: [key], func: (key: string) => { delete window.__webMCPDevEval?.[key]; } }).catch(() => {});
+      if (typeof raw !== 'string') return bridgeError('EVALUATION_ERROR', 'The code produced no result. A syntax error stops the script before it runs; check the code.');
+      const parsed = JSON.parse(raw) as { ok: true; text: string; truncated?: boolean } | { ok: false; error: { code: string; message: string; details?: unknown } };
+      if (!parsed.ok) return bridgeError(parsed.error.code, parsed.error.message, parsed.error.details);
+      return { ok: true, data: parsed.truncated ? { truncated: true, text: parsed.text } : JSON.parse(parsed.text) };
+    })();
+    return Promise.race([run, timeout]);
   }
   async function execute(id: string, call: PageCall) {
     await ready;
@@ -74,8 +134,13 @@ export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab
       const tab = await chrome.tabs.get(call.tabId);
       if (shared[String(call.tabId)] !== origin) return bridgeError('TAB_NOT_SHARED', 'This tab is no longer shared.');
       if (tab.url !== call.url || tab.status === 'loading') return bridgeError('STALE_TAB', 'The page changed. Rediscover tools.');
+      if (call.code !== undefined) {
+        const outcome = await evaluate(id, { ...call, code: call.code });
+        await publish();
+        return outcome;
+      }
       const results = await chrome.scripting.executeScript({ target: { tabId: call.tabId, documentIds: [call.documentId] }, world: 'MAIN',
-        args: [id, call.name, JSON.stringify(call.input), call.url],
+        args: [id, call.name ?? '', JSON.stringify(call.input ?? null), call.url],
         func: async (id: string, name: string, serialized: string, url: string) => {
           if (location.href !== url) return { ok: false as const, error: { code: 'STALE_TAB', message: 'The page changed before execution.' } };
           return window.webMCPDev?.callRequest(id, name, JSON.parse(serialized)) ?? { ok: false as const, error: { code: 'NOT_ACTIVE', message: 'Refresh this page to activate the current extension.' } };
@@ -103,6 +168,56 @@ export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab
       return result;
     } finally { running.delete(id); }
   }
+  /** Activate one bundle in every open matching tab and report what each document now runs. */
+  async function activate(plugin: PluginBundle): Promise<Activation[]> {
+    const activations: Activation[] = [];
+    for (const tab of await chrome.tabs.query({ url: plugin.matches })) {
+      if (tab.id === undefined || !isWebPage(tab.url)) continue;
+      const base = { tabId: tab.id, url: tab.url, shared: !!shared[String(tab.id)] };
+      try {
+        const result = await syncTab(tab.id);
+        const state = result.plugins.find(entry => entry.id === plugin.id);
+        const error = result.errors.find(message => message.startsWith(`${plugin.name}:`))?.slice(plugin.name.length + 1).trim() ?? state?.error;
+        activations.push({ ...base, ok: !!state?.ok && !error, ...(error ? { error } : {}), tools: state?.tools ?? [], ...(state?.refreshError ? { refreshError: state.refreshError } : {}), ...(state?.registrationErrors?.length ? { registrationErrors: state.registrationErrors } : {}) });
+      } catch (error) { activations.push({ ...base, ok: false, error: error instanceof Error ? error.message : String(error) }); }
+    }
+    return activations;
+  }
+  async function install(message: unknown): Promise<{ ok: boolean; error?: string; tabs?: Activation[] }> {
+    const parsed = pluginBundleSchema.safeParse(message);
+    if (!parsed.success) return { ok: false, error: 'Invalid plugin bundle.' };
+    if (!(await devModeEnabled())) return { ok: false, error: DEV_MODE_OFF };
+    if (!userScriptsAvailable()) return { ok: false, error: USER_SCRIPTS_OFF };
+    await saveDynamicPlugins([parsed.data]);
+    await reconcileUserScripts();
+    const tabs = await activate(parsed.data);
+    snapshotSignature = ''; await publish();
+    return { ok: true, tabs };
+  }
+  /** The relay's catalog is authoritative while connected: adopt new revisions, drop plugins it no longer has. */
+  async function adoptCatalog(message: unknown) {
+    const parsed = z.array(pluginBundleSchema).max(200).safeParse(message);
+    if (!parsed.success || !(await devModeEnabled())) return;
+    const before = new Map((await dynamicPlugins()).map(plugin => [plugin.id, plugin]));
+    await saveDynamicPlugins(parsed.data, { replaceAll: true });
+    await reconcileUserScripts();
+    for (const [id, previous] of before) if (!parsed.data.some(plugin => plugin.id === id)) await dispose(previous);
+    for (const plugin of parsed.data) if (before.get(plugin.id)?.revision !== plugin.revision) await activate(plugin);
+    snapshotSignature = ''; await publish();
+  }
+  async function dispose(plugin: PluginBundle) {
+    for (const tab of await chrome.tabs.query({ url: plugin.matches })) {
+      if (tab.id === undefined) continue;
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', args: [plugin.id], func: (id: string) => window.webMCPDev?.unregisterPlugin(id) }).catch(() => {});
+    }
+  }
+  async function remove(pluginId: string, notifyRelay: boolean) {
+    const removed = await deleteDynamicPlugin(pluginId);
+    await reconcileUserScripts();
+    if (removed) await dispose(removed);
+    if (notifyRelay) send({ type: 'plugin-removed', pluginId });
+    snapshotSignature = ''; await publish();
+  }
   async function connect() {
     if (connecting || socket && socket.readyState < WebSocket.CLOSING) return;
     connecting = true;
@@ -119,8 +234,8 @@ export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab
       ws.onmessage = event => {
         let message: any; try { message = JSON.parse(String(event.data)); } catch { ws.close(); return; }
         if (message.type === 'ready') {
-          connected = true; status = 'Connected to local bridge'; snapshot = [];
-          send({ type: 'snapshot', tabs: [] }); void publish();
+          connected = true; status = 'Connected to local bridge'; snapshot = []; snapshotSignature = '';
+          void capabilities().then(able => { send({ type: 'snapshot', tabs: [], capabilities: able }); return publish(); });
         } else if (message.type === 'call' && typeof message.id === 'string') {
           const parsed = callSchema.safeParse(message.call);
           if (!parsed.success) { send({ type: 'result', id: message.id, result: bridgeError('INVALID_INPUT', 'Invalid tool request.') }); return; }
@@ -129,10 +244,17 @@ export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab
             () => { if (socket === ws) send({ type: 'result', id: message.id, result: bridgeError('OUTCOME_UNKNOWN', 'The tab changed or execution failed. Inspect the page before retrying an action.') }); },
           );
         } else if (message.type === 'cancel') void cancel(message.id);
+        else if (message.type === 'catalog') void adoptCatalog(message.plugins).catch(console.warn);
+        else if (message.type === 'install' && typeof message.id === 'string') {
+          void install(message.plugin).then(
+            result => { if (socket === ws) send({ type: 'reply', id: message.id, result }); },
+            error => { if (socket === ws) send({ type: 'reply', id: message.id, result: { ok: false, error: error instanceof Error ? error.message : String(error) } }); },
+          );
+        } else if (message.type === 'remove' && typeof message.pluginId === 'string') void remove(message.pluginId, false).catch(console.warn);
       };
       ws.onclose = event => {
         if (socket !== ws) return;
-        socket = undefined; connected = false; snapshot = [];
+        socket = undefined; connected = false; snapshot = []; snapshotSignature = '';
         status = event.code === 1008 ? 'Pairing rejected. Generate a new pairing code.' : 'Waiting for the local bridge…';
         for (const id of running.keys()) void cancel(id);
         if (event.code !== 1008) reconnect = setTimeout(() => { void connect(); }, 3000);
@@ -157,7 +279,7 @@ export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab
       await ready;
       if (message.type === 'agent:approve') {
         const tab = await chrome.tabs.get(message.tabId);
-        if (!tab.url || !(await catalog).some(plugin => matchesSite(plugin, tab.url!))) throw new Error('Open the website you want to share, then approve from its extension popup.');
+        if (!isWebPage(tab.url)) throw new Error('Open the website you want to share, then approve from its extension popup.');
         const pair = await discovery.approve(message.requestId);
         const current = await chrome.tabs.get(message.tabId);
         if (current.url !== tab.url) throw new Error('The tab changed during approval. Open the extension on the intended page and request access again.');
@@ -189,17 +311,24 @@ export function startAgentBridge(catalog: Promise<PluginCatalogEntry[]>, syncTab
       } else if (message.type === 'agent:share') {
         if (!connected) throw new Error('Ask your agent to request a connection, then approve it here.');
         const tab = await chrome.tabs.get(message.tabId);
-        if (!tab.url || !(await catalog).some(plugin => matchesSite(plugin, tab.url!))) throw new Error('Open a supported website to share this tab.');
+        // Any web page can be shared: a site without a plugin is where an agent builds one.
+        if (!isWebPage(tab.url)) throw new Error('Open a website to share this tab.');
         shared[String(message.tabId)] = new URL(tab.url).origin; await saveSharing();
-        await syncTab(message.tabId); await publish();
+        await syncTab(message.tabId); snapshotSignature = ''; await publish();
       } else if (message.type === 'agent:unshare') {
         delete shared[String(message.tabId)]; await saveSharing();
         for (const [id, call] of running) if (call.tabId === message.tabId) void cancel(id);
         await publish();
+      } else if (message.type === 'agent:devmode') {
+        await chrome.storage.local.set({ agentDevMode: message.enabled === true });
+        snapshotSignature = ''; await publish();
+      } else if (message.type === 'agent:remove-plugin') {
+        await remove(z.string().parse(message.pluginId), true);
       }
       await discovery.connect();
       const found = discovery.state();
-      return { ok: true, workerVersion: '0.5.0', status: connected ? status : found.available ? 'Ready for agent requests' : 'Waiting for your local agent…', connected, shared: !!shared[String(message.tabId)], requests: found.requests, port: found.port };
+      const able = await capabilities();
+      return { ok: true, workerVersion: WORKER_VERSION, status: connected ? status : found.available ? 'Ready for agent requests' : 'Waiting for your local agent…', connected, shared: !!shared[String(message.tabId)], requests: found.requests, port: found.port, devMode: able.devMode, userScripts: able.userScripts };
     })().then(respond, error => respond({ ok: false, error: error instanceof Error ? error.message : 'Connection failed.' }));
     return true;
   });

@@ -140,7 +140,13 @@ node scripts/build.mjs --outdir /tmp/webmcp-test/build --extra-plugin /absolute/
 
 The destination must end in `build` or `dist`; the build replaces that output directory. Imports from `@webmcp-dev/sdk` resolve through the host build even for external plugin folders. This is a local developer packaging convention, not a remote code marketplace or npm distribution.
 
-The build emits one self-contained `plugins/<id>.js`, a metadata catalog, and the union of site permissions. All executable code ships in the extension. Do not dynamically fetch and evaluate plugin JavaScript. Use fixtures like `tests/plugin-fixture` to verify your plugin without changing real site data.
+The build emits one self-contained `plugins/<id>.js` and a metadata catalog with a content revision per plugin. Every bundle replaces an older revision of itself when it runs in a document, which is how both rebuilt and reinstalled plugins reach open tabs. Use fixtures like `tests/plugin-fixture` to verify your plugin without changing real site data.
+
+## Agent-installed plugins
+
+The same folder contract works without a build. A connected agent calls the MCP tool `webmcp_install_plugin` with the folder's files as `{"plugin.json": "...", "index.ts": "...", "support.ts": "..."}`: plain file names, no directories, `.ts`, `.json` or `.md` only. The local bridge validates `plugin.json` with the same rules as the build, compiles the folder with esbuild against this checkout's runtime, SDK and `zod`, stores it under `~/.webmcp-dev/plugins/<id>`, and the extension injects it through `chrome.userScripts`. Compile errors come back with file, line and column; runtime activation problems come back per tab as the plugin's own `refreshError` and registration errors. Type errors are not checked: esbuild strips types, so a wrong type surfaces as a runtime error from the tool.
+
+Ids must not collide with a built-in plugin. Reinstalling an id replaces the stored folder and updates every open matching document in place. `webmcp_list_plugins` and `webmcp_read_plugin` make the folders discoverable to any later agent session, and a folder copied into `src/plugins` builds unchanged.
 
 
 ## Local MCP exposure

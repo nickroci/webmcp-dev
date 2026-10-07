@@ -2,12 +2,12 @@
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>WebMCP Dev</title><link rel="stylesheet" href="popup.css"></head>
 <body>
-  <header><span class="mark">W</span><div><h1>WebMCP Dev</h1><p id="site">Connecting…</p></div><span class="version">0.5.0</span></header>
-  <nav aria-label="Views"><button type="button" data-view="tools" aria-pressed="true">Tools</button><button type="button" data-view="plugins" aria-pressed="false">Site plugins</button><button type="button" data-view="agents" aria-pressed="false">Agents</button><button type="button" id="refresh" class="secondary">Refresh</button></nav>
+  <header><span class="mark">W</span><div><h1>WebMCP Dev</h1><p id="site">Connecting…</p></div><span class="version">0.6.0</span></header>
+  <nav aria-label="Views"><button type="button" data-view="agents" aria-pressed="true">Agents</button><button type="button" data-view="tools" aria-pressed="false">Tools</button><button type="button" data-view="plugins" aria-pressed="false">Site plugins</button><button type="button" id="refresh" class="secondary">Refresh</button></nav>
   <main>
     <p id="status" role="status">Finding site plugins…</p>
     <button type="button" id="reload-extension" hidden>Reload extension</button>
-    <section id="tools-view">
+    <section id="tools-view" hidden>
       <div id="empty" hidden><h2>No tools on this page</h2><p>Open a site supported by an enabled plugin. Available sites are listed under Site plugins.</p></div>
       <form id="tool-form" hidden>
         <label class="tool-label" for="tool">Tool</label><select id="tool" aria-label="Tool"></select>
@@ -20,8 +20,8 @@
       </form>
       <section id="output" hidden aria-live="polite"><div class="input-heading"><h2>Result</h2><button type="button" id="copy" class="text-button">Copy JSON</button></div><pre id="result"></pre></section>
     </section>
-    <section id="plugins-view" hidden><h2>Installed site plugins</h2><p class="hint">Enabled plugins load automatically on matching sites.</p><div id="plugins"></div><p class="hint">Add plugin folders to this project, rebuild, and reload this extension. No separate extension is needed per site.</p></section>
-    <section id="agents-view" hidden>
+    <section id="plugins-view" hidden><h2>Installed site plugins</h2><p class="hint">Enabled plugins load automatically on matching sites. Agent-installed plugins are kept in ~/.webmcp-dev/plugins and update open tabs in place.</p><div id="plugins"></div><p class="hint">Add plugin folders to this project and rebuild, or let a connected agent install one for the site you share.</p></section>
+    <section id="agents-view">
       <h2>Agent access</h2>
       <p class="hint">Ask your agent to connect to this tab using WebMCP Dev. Approve its request here.</p>
       <p id="agent-status" role="status">Checking connection…</p>
@@ -30,6 +30,9 @@
       <p id="no-requests" class="hint">No pending requests. Your agent can request access with <code>webmcp_request_connection</code>.</p>
       <div class="agent-actions"><button type="button" id="share-tab" disabled>Share this tab</button><button type="button" id="disconnect-agent" class="secondary">Disconnect</button></div>
       <p class="hint">Connected local agents can run enabled tools in shared tabs, including publishing tools. Sharing ends when you stop sharing, leave the site’s origin, close the tab, or restart Chrome.</p>
+      <label class="toggle"><input id="dev-mode" type="checkbox"><span>Let agents develop plugins</span></label>
+      <p class="hint">Allows connected agents to install site plugins and run JavaScript in the tabs you share. Installed plugins run on their matching sites like built-in ones until you remove them.</p>
+      <div id="user-scripts-hint" hidden><p class="hint warning">Chrome has not allowed user scripts for this extension yet. Turn on <strong>Allow User Scripts</strong> on its details page, then reopen this popup.</p><button type="button" id="open-extension-settings" class="secondary">Open extension details</button></div>
       <details id="advanced-connection"><summary>Advanced connection settings</summary>
         <form id="port-form"><label>Local bridge port<input id="bridge-port" type="number" min="1024" max="65535" value="19375" required></label><button type="submit" class="secondary">Use port</button></form>
         <details><summary>Manual pairing</summary><form id="pair-form"><label>Pairing code<textarea id="pair-code" rows="3" spellcheck="false" autocomplete="off" required></textarea></label><button type="submit">Connect</button></form></details>

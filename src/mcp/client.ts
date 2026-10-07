@@ -40,7 +40,7 @@ export class RelayClient {
     });
     return new RelayClient(socket);
   }
-  request(method: 'tabs' | 'call' | 'shutdown' | 'pairing:request', params?: unknown, signal?: AbortSignal): Promise<BridgeResult> {
+  request(method: 'tabs' | 'call' | 'shutdown' | 'pairing:request' | 'status' | 'plugins:list' | 'plugins:read' | 'plugins:install' | 'plugins:remove', params?: unknown, signal?: AbortSignal): Promise<BridgeResult> {
     if (this.socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error('Local bridge is not connected. Restart this MCP connection.'));
     if (signal?.aborted) return Promise.reject(new Error('Tool call cancelled.'));
     const id = randomUUID();

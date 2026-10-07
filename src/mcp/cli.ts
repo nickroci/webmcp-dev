@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { readConfig, pairingCode, stateDirectory, type BridgeConfig } from './config';
 import { RelayClient } from './client';
+import { PluginStore } from './plugins';
 import { startRelay } from './relay';
 import { createMcpServer } from './server';
 
@@ -30,7 +31,10 @@ async function main() {
   if (!['stdio', 'pair', 'relay', 'stop'].includes(command)) throw new Error('Usage: node dist/mcp/cli.js [stdio|pair|relay|stop]');
   const config = await readConfig();
   if (command === 'relay') {
-    const relay = await startRelay(config);
+    // Agent-authored plugins persist beside the connection file and are compiled from this checkout.
+    const store = new PluginStore(join(stateDirectory(), 'plugins'));
+    await store.load(message => console.error(`WebMCP Dev: ${message}`));
+    const relay = await startRelay(config, { store });
     const stop = () => { void relay.close().then(() => process.exit(0)); };
     process.on('SIGINT', stop); process.on('SIGTERM', stop);
     return;

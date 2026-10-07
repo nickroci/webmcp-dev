@@ -53,7 +53,7 @@ async function loadTools() {
     const errors = state.plugins.flatMap(plugin => [...plugin.registrationErrors, ...(plugin.refreshError ? [plugin.refreshError] : [])]);
     const mode = state.plugins.some(plugin => plugin.mode !== 'local') ? 'WebMCP' : 'local tools';
     $('#status').textContent = errors.length ? `Local tools available; native registration failed: ${errors.join('; ')}` : `${state.plugins.length} active plugin(s) · ${mode}`;
-  } else $('#status').textContent = 'No installed plugin matches this page.';
+  } else $('#status').textContent = 'No installed plugin matches this page. Share it with an agent and it can build one.';
   const select = $<HTMLSelectElement>('#tool');
   const previous = select.value;
   select.replaceChildren();
@@ -86,8 +86,25 @@ async function renderPlugins() {
     const description = document.createElement('p'); description.textContent = plugin.description; card.append(description);
     const matches = document.createElement('code'); matches.textContent = plugin.matches.join(' · '); card.append(matches);
     const here = document.createElement('p'); here.textContent = matchesSite(plugin, tabUrl) ? 'Matches this page' : 'Available on its matching sites'; card.append(here);
+    if (plugin.source === 'dynamic') {
+      const origin = document.createElement('p'); origin.className = 'installed-by';
+      origin.textContent = `Installed by ${plugin.installedBy ?? 'an agent'}${plugin.installedAt ? ` · ${new Date(plugin.installedAt).toLocaleString()}` : ''}${plugin.note ? ` · ${plugin.note}` : ''}`;
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'secondary'; remove.textContent = 'Remove'; remove.setAttribute('aria-label', `Remove ${plugin.name}`);
+      remove.addEventListener('click', async () => {
+        remove.disabled = true;
+        try { await agentAction('agent:remove-plugin', { pluginId: plugin.id }); await loadCatalog(); await renderPlugins(); await loadTools(); }
+        catch (error) { showError(error); remove.disabled = false; }
+      });
+      card.append(origin, remove);
+    }
     container.append(card);
   }
+}
+async function loadCatalog() {
+  const builtIn: PluginCatalogEntry[] = await fetch(chrome.runtime.getURL('plugins.json')).then(response => response.json());
+  const { dynamicPlugins = {} } = await chrome.storage.local.get('dynamicPlugins');
+  const installed = Object.values(dynamicPlugins as Record<string, PluginCatalogEntry & { code?: string }>).map(({ code: _code, ...plugin }) => plugin);
+  catalog = [...builtIn.map(plugin => ({ ...plugin, source: 'static' as const })), ...installed];
 }
 
 function showError(error: unknown) { $('#status').textContent = error instanceof Error ? error.message : String(error); if (error instanceof WorkerUnavailableError) $('#reload-extension').hidden = false; }
@@ -140,14 +157,13 @@ $('#copy').addEventListener('click', async () => {
 });
 
 async function start() {
-  catalog = await fetch(chrome.runtime.getURL('plugins.json')).then(response => response.json());
+  await loadCatalog();
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   tabId = tab?.id; tabUrl = tab?.url ?? '';
   $('#site').textContent = /^https?:/.test(tabUrl) ? new URL(tabUrl).hostname : 'Open a supported website';
   await renderPlugins();
   await loadTools().catch(showError);
   await agentAction().catch(agentError);
-  if (requestSignature && requestSignature !== '[]') selectView('agents');
 }
 void start().catch(showError);
 
@@ -157,14 +173,17 @@ let agentBusy = false;
 async function agentAction(type = 'agent:status', extra: Record<string, unknown> = {}) {
   const state = await sendWorkerMessage({ type, tabId, ...extra });
   if (!state.ok) throw new Error(state.error ?? 'The extension could not complete this action.');
-  if (state.workerVersion !== '0.5.0') throw new WorkerUnavailableError();
+  if (state.workerVersion !== '0.6.0') throw new WorkerUnavailableError();
   sharing = state.shared;
   $('#reload-extension').hidden = true;
   $('#agent-status').textContent = `${state.status}${sharing ? ' · This tab is shared' : ''}`;
-  const supported = tabId !== undefined && catalog.some(plugin => matchesSite(plugin, tabUrl));
+  // Any web page can be shared; a site without a plugin is where an agent builds one.
+  const supported = tabId !== undefined && /^https?:/.test(tabUrl);
   $('#share-tab').textContent = sharing ? 'Stop sharing this tab' : 'Share this tab';
   $<HTMLButtonElement>('#share-tab').disabled = !supported || !state.connected;
   $<HTMLButtonElement>('#disconnect-agent').disabled = !state.connected && !sharing;
+  $<HTMLInputElement>('#dev-mode').checked = state.devMode === true;
+  $('#user-scripts-hint').hidden = state.userScripts !== false || state.devMode !== true;
   if (document.activeElement !== $('#bridge-port')) $<HTMLInputElement>('#bridge-port').value = String(state.port);
   const requests = state.requests ?? [];
   const signature = JSON.stringify(requests);
@@ -182,7 +201,7 @@ async function agentAction(type = 'agent:status', extra: Record<string, unknown>
       const decline = document.createElement('button'); decline.type = 'button'; decline.className = 'secondary'; decline.textContent = 'Decline';
       decline.addEventListener('click', () => { void runAgentAction('agent:decline', { requestId: request.id }); });
       buttons.append(approve, decline); card.append(heading, detail, buttons);
-      if (!supported) { const hint = document.createElement('p'); hint.textContent = 'Open a supported website, then open this popup there to approve.'; card.append(hint); }
+      if (!supported) { const hint = document.createElement('p'); hint.textContent = 'Open the website you want to share, then open this popup there to approve.'; card.append(hint); }
       container.append(card);
     }
   }
@@ -212,5 +231,7 @@ $('#pair-form').addEventListener('submit', event => {
 });
 $('#port-form').addEventListener('submit', event => { event.preventDefault(); void runAgentAction('agent:port', { port: Number($<HTMLInputElement>('#bridge-port').value) }); });
 $('#share-tab').addEventListener('click', () => { void runAgentAction(sharing ? 'agent:unshare' : 'agent:share'); });
+$('#dev-mode').addEventListener('change', () => { void runAgentAction('agent:devmode', { enabled: $<HTMLInputElement>('#dev-mode').checked }); });
+$('#open-extension-settings').addEventListener('click', () => { void chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` }); });
 $('#disconnect-agent').addEventListener('click', () => { void runAgentAction('agent:disconnect'); });
 setInterval(() => { if (!agentBusy && !$('#agents-view').hidden) void agentAction().catch(agentError); }, 1000);

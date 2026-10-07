@@ -19,7 +19,7 @@ The browser connection stays on your computer. The bridge has no Firecrawl integ
 ## Setup
 
 1. Run `npm ci && npm run build` in this project.
-2. Load `dist/extension` in Chrome, or reload the existing unpacked extension. Refresh your Reddit tab afterward.
+2. Load `dist/extension` in Chrome, or reload the existing unpacked extension. For agent-built plugins, also turn on **Allow User Scripts** on the extension's Details page.
 3. Configure your local MCP client below, verify the entry reports as connected with `claude mcp list` or `codex mcp list`, then start a new session or reconnect its MCP server. Tools load at session start.
 4. Ask the agent to connect using WebMCP Dev. It calls `webmcp_request_connection`.
 5. Open the extension on the website you want to share and press **Allow and share this tab** on the pending request. No copy/paste step is needed.
@@ -58,10 +58,13 @@ No terminal needs to stay open. A new MCP adapter starts the relay automatically
 3. `webmcp_select_tab` selects one key for this MCP session. The result includes its available tools, and the server sends a tool-list-change notification.
 4. Rediscover MCP tools. Site tools appear by their own names and input schemas.
 5. Use navigation tools to put the relevant content on the visible page; use data tools to read it. Rediscover after navigation or call `webmcp_refresh_tools`.
+6. A shared tab with no tools is a site without a plugin. Call `webmcp_list_plugins` and `webmcp_read_plugin` to find existing work, `webmcp_evaluate` to probe the page, and `webmcp_install_plugin` with the plugin folder as `files` to install or update one. The result lists compile warnings and, per open matching tab, the activated tool names or the activation error. Reinstalling the same id updates the open document in place. `webmcp_remove_plugin` removes an agent-installed plugin everywhere.
+
+Plugin development is gated twice, both off by default: the **Let agents develop plugins** switch in the popup's Agents view, and Chrome's **Allow User Scripts** toggle for the extension. `webmcp_install_plugin` and `webmcp_evaluate` return `DEV_MODE_DISABLED` or `USER_SCRIPTS_UNAVAILABLE` with the remedy, and `webmcp_doctor` reports both per connected Chrome profile.
 
 For Reddit: browse `webdev` with `sort: "latest"`, list one post, open its ID with `reddit_open_post`, then read it. Listing and reading return JSON; the browse/open calls change the actual tab. Creating a post submits it through the signed-in session and returns its URL; open it afterward to show the result. To reply, call `reddit_reply` with the intended `t3_` post or `t1_` comment fullname as `parent_id`, Markdown `text`, and a unique `request_id`. Refresh the thread after a confirmed reply to show it. Reuse the request ID with identical inputs on retries; uncertain submissions must be inspected before any new attempt.
 
-`webmcp_doctor` reports, for each shared tab, the plugin version that document is running against the version the extension installed, plus the selected tab, document ID, runtime version and tool count. A tab whose plugin version trails the installed one is running a document injected before the last rebuild; only opening the site in a new tab clears it. A tab that reports no version at all predates this diagnostic and needs the same treatment.
+`webmcp_doctor` reports, for each shared tab, the plugin revision that document is running against the one the extension installed, plus the selected tab, document ID, runtime version, tool count, and each connected profile's development toggles. Every plugin bundle replaces an older revision of itself when it runs, and the extension re-runs installed bundles in a document that reports a stale revision, so a stale tab normally heals within a couple of seconds; call `webmcp_refresh_tools` and check again before asking the user to reload the page.
 
 Clients that cache their initial tool list can use the always-present `webmcp_call_tool` fallback. Pass `{ "tool": "reddit_list_posts", "input": { "subreddit": "webdev", "sort": "latest", "limit": 1 } }`. Select or refresh returns the original page schemas in `data.tab.tools`; this fallback follows those schemas directly, including root arrays or scalar inputs. It routes through the same tab checks and execution path as directly exposed site tools. Selection belongs to the MCP session; reconnecting clears it.
 
@@ -71,12 +74,13 @@ Clients that cache their initial tool list can use the always-present `webmcp_ca
 - Sharing continues through navigation within the same origin. Leaving that origin, closing the tab, stopping sharing, or disconnecting revokes access. Share the tab again after moving to another origin, including `www.reddit.com` → `old.reddit.com`.
 - All local MCP clients with this installation's credentials can see shared tabs and call their enabled tools. Pairing is not a separate approval for each agent session.
 - Calls target Chrome document IDs and verify the expected URL before execution. A stale page fails instead of executing in a replacement document.
-- One bridge tool call runs per tab at a time. Other calls return `TAB_BUSY`. Human interaction with the page remains available.
+- One bridge tool call runs per tab at a time. Other calls return `TAB_BUSY`; nothing is queued. Human interaction with the page remains available.
+- Several agents can work at once. Each MCP session has its own tab selection, so two agents in two shared tabs run in parallel; two agents in one tab contend for it and for the visible page, so give each agent its own tab. Agent-installed plugins are global: an install from one session reaches every connected Chrome profile and every agent, installs are serialized, and reinstalling an id overwrites the previous revision without merging. The popup and `webmcp_list_plugins` show who installed each revision and their note.
 - Navigation acknowledgement recognizes both a replacement document and a URL change within the current document. It waits for page tools to be ready, any active Navigation API transition to finish, and updated tab metadata to reach the relay, with a 15-second timeout. `NAVIGATION_PENDING` means navigation started but the new page was not ready in that interval.
 - Cancellation is forwarded to the plugin's AbortSignal. A handler must cooperate with cancellation, and a completed website action cannot be undone by aborting.
 - Lost responses and disconnects never automatically replay actions. An `OUTCOME_UNKNOWN` result requires inspecting the page or account before retrying a mutation. Reddit posting additionally uses its existing request-ID tracking.
 
-Page code and plugin output remain untrusted input for the agent. Plugins themselves are developer-installed code running in the site's main world; the site can inspect or alter that runtime. The bridge exposes registered plugin tools rather than an arbitrary JavaScript evaluation endpoint.
+Page code and plugin output remain untrusted input for the agent. Plugins themselves are developer-installed code running in the site's main world; the site can inspect or alter that runtime. With plugin development off, the bridge exposes registered plugin tools only. With it on, connected agents can also run code in shared tabs and install plugins that run on their matching sites until removed; that is the point of the mode, so leave it off when no agent is building anything.
 
 ## Local state and troubleshooting
 
@@ -88,6 +92,7 @@ Local state lives in `~/.webmcp-dev/`:
 
 - `connection.json`: port and credentials, created with owner-only file permissions.
 - `bridge.log`: startup errors from the background relay; tool arguments and page results are not logged.
+- `plugins/<id>/`: agent-installed plugin folders (`plugin.json`, `index.ts`, support files), plus `.installed.json` (who, when, note, revision) and the compiled `.bundle.js`. Copy a folder into `src/plugins` to ship it; delete it, or call `webmcp_remove_plugin`, to drop it. The relay recompiles a folder whose source changed on disk when it starts.
 
 `WEBMCP_STATE_DIR` selects a different state directory. `WEBMCP_PORT` selects the port when that directory's connection file is first created. Use the same environment settings for every MCP client. For a non-default port, set that port under **Agents → Advanced connection settings → Local bridge port**. The normal default needs no port configuration.
 
@@ -104,7 +109,11 @@ Legacy manual pairing remains available under **Advanced connection settings →
 | Pairing rejected | Request access again from the configured MCP client and approve in the extension. |
 | No shared tabs | Ask the agent to request access, then approve on the intended site. If already connected, use **Share this tab**. Check the Chrome profile. |
 | No site tools yet | Select a shared tab, then rediscover tools. Check that its plugin is enabled. |
-| Tool list missing a newly built tool | Call `webmcp_doctor`: it compares the running plugin version with the installed one. The tab still runs the previously injected plugin, so reload the extension, then open the site in a new tab and share that one; same-document navigation does not re-inject. |
+| Tool list missing a newly built tool | Call `webmcp_doctor`: it compares the running plugin revision with the installed one. The extension re-syncs a stale document on its own; call `webmcp_refresh_tools` again, and reload the page only if it stays stale. |
+| `DEV_MODE_DISABLED` | Enable **Let agents develop plugins** in the popup's Agents view. |
+| `USER_SCRIPTS_UNAVAILABLE` | Turn on **Allow User Scripts** on the extension's Details page in `chrome://extensions`. Chrome 135 or newer is required. |
+| `COMPILE_ERROR` | The error's `details` list esbuild messages with file, line and column. Fix the source and reinstall; the previous revision stays active. |
+| Installed plugin activated but reports `refreshError` or no tools | The bundle ran, but `setup` or the tool list threw. The message is the plugin's own; a name clash with another plugin's tool is the usual cause. |
 | Refresh this page / stale runtime | Refresh the website after an extension update. |
 | Bridge disconnected | Restart the client's MCP connection. The adapter does not replay an interrupted request. |
 | Port already occupied or incompatible relay | Check `bridge.log`. Stop the old bridge before upgrading, or choose another state directory and port. |

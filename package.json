@@ -1,9 +1,9 @@
 {
   "name": "webmcp-dev",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
-  "description": "A Chrome extension that adds WebMCP to websites without native support. Includes WebMCP for Reddit and LinkedIn, site plugins, and a local MCP server for AI agents.",
+  "description": "A Chrome extension that adds WebMCP to websites without native support. Includes WebMCP for Reddit and LinkedIn, site plugins, a local MCP server for AI agents, and agent-installed plugins for any site.",
   "exports": {
     ".": {
       "types": "./dist/types/index.d.ts",
@@ -31,14 +31,14 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "ws": "^8.21.3",
-    "zod": "4.6.5"
+    "zod": "4.6.5",
+    "esbuild": "0.28.2"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
     "@types/chrome": "0.3.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.1",
-    "esbuild": "0.28.2",
     "tsx": "4.23.13",
     "typescript": "7.0.2"
   },
