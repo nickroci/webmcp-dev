@@ -161,7 +161,9 @@ export function createMcpServer(relay: RelayClient) {
       }
       await refresh();
       const tab = cached;
-      if (!tab) return result(bridgeError('NO_TAB_SELECTED', 'Share a tab in the extension, then call webmcp_select_tab.'));
+      if (!tab) return result(selectedKey
+        ? bridgeError('TAB_UNAVAILABLE', 'The selected tab is loading, was closed, or is no longer shared. Retry in a moment, or call webmcp_list_tabs and select again.')
+        : bridgeError('NO_TAB_SELECTED', 'Share a tab in the extension, then call webmcp_select_tab.'));
       if (name === 'webmcp_evaluate') {
         const { code } = evaluateInput.parse(input);
         // Catch syntax errors here, where the message is precise, instead of as an opaque injection failure.

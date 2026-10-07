@@ -110,6 +110,7 @@ Legacy manual pairing remains available under **Advanced connection settings →
 | No shared tabs | Ask the agent to request access, then approve on the intended site. If already connected, use **Share this tab**. Check the Chrome profile. |
 | No site tools yet | Select a shared tab, then rediscover tools. Check that its plugin is enabled. |
 | Tool list missing a newly built tool | Call `webmcp_doctor`: it compares the running plugin revision with the installed one. The extension re-syncs a stale document on its own; call `webmcp_refresh_tools` again, and reload the page only if it stays stale. |
+| `TAB_UNAVAILABLE` | The selected tab is mid-navigation, closed, or no longer shared. Retry after a moment; if it persists, call `webmcp_list_tabs` and select again, or ask the user to share the tab. |
 | `DEV_MODE_DISABLED` | Enable **Let agents develop plugins** in the popup's Agents view. |
 | `USER_SCRIPTS_UNAVAILABLE` | Turn on **Allow User Scripts** on the extension's Details page in `chrome://extensions`. Chrome 135 or newer is required. |
 | `COMPILE_ERROR` | The error's `details` list esbuild messages with file, line and column. Fix the source and reinstall; the previous revision stays active. |

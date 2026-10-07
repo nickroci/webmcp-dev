@@ -456,7 +456,8 @@ test('an actual stdio MCP client requests approval in the extension, navigates v
     await popup.screenshot({ path: 'test-results/agents.png', fullPage: true });
     await popup.getByRole('button', { name: 'Stop sharing this tab', exact: true }).click();
     await expect.poll(async () => (await call('webmcp_list_tabs')).data.tabs.length).toBe(0);
-    expect((await call('webmcp_evaluate', { code: 'return 1;' })).error?.code).toBe('NO_TAB_SELECTED');
+    // The session still remembers its selection; the tab, not the selection, is what went away.
+    expect((await call('webmcp_evaluate', { code: 'return 1;' })).error?.code).toBe('TAB_UNAVAILABLE');
     await popup.getByRole('button', { name: 'Disconnect', exact: true }).click();
   } finally {
     await client.close(); await transport.close(); await popup.close(); await page.close();

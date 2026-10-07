@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { matchesSite } from '../src/core/matches';
 import type { PluginCatalogEntry } from '../src/core/types';
 import { bridgeError, callSchema, pairingSchema, pluginBundleSchema, PROTOCOL_VERSION, type Activation, type BridgeResult, type BrowserCapabilities, type PageCall, type PluginBundle, type SharedTab } from '../src/mcp/protocol';
 import type { SyncResult } from './background';
@@ -168,11 +169,17 @@ export function startAgentBridge(catalog: () => Promise<PluginCatalogEntry[]>, s
       return result;
     } finally { running.delete(id); }
   }
+  /** Open web tabs the plugin's own matcher accepts; the same matcher decides injection in the page. */
+  const matchingTabs = async (plugin: { matches: string[] }) => {
+    const tabs = await chrome.tabs.query({});
+    // Shared tabs are the ones an agent is waiting on; include them even if the query missed them.
+    for (const id of Object.keys(shared)) if (!tabs.some(tab => tab.id === Number(id))) tabs.push(await chrome.tabs.get(Number(id)).catch(() => undefined as unknown as chrome.tabs.Tab));
+    return tabs.filter((tab): tab is chrome.tabs.Tab & { id: number; url: string } => !!tab && tab.id !== undefined && isWebPage(tab.url) && matchesSite(plugin, tab.url));
+  };
   /** Activate one bundle in every open matching tab and report what each document now runs. */
   async function activate(plugin: PluginBundle): Promise<Activation[]> {
     const activations: Activation[] = [];
-    for (const tab of await chrome.tabs.query({ url: plugin.matches })) {
-      if (tab.id === undefined || !isWebPage(tab.url)) continue;
+    for (const tab of await matchingTabs(plugin)) {
       const base = { tabId: tab.id, url: tab.url, shared: !!shared[String(tab.id)] };
       try {
         const result = await syncTab(tab.id);
@@ -206,8 +213,7 @@ export function startAgentBridge(catalog: () => Promise<PluginCatalogEntry[]>, s
     snapshotSignature = ''; await publish();
   }
   async function dispose(plugin: PluginBundle) {
-    for (const tab of await chrome.tabs.query({ url: plugin.matches })) {
-      if (tab.id === undefined) continue;
+    for (const tab of await matchingTabs(plugin)) {
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', args: [plugin.id], func: (id: string) => window.webMCPDev?.unregisterPlugin(id) }).catch(() => {});
     }
   }

@@ -73,10 +73,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 
 async function syncOpenTabs() {
   const plugins = await catalog();
-  const matches = [...new Set(plugins.flatMap(plugin => plugin.matches))];
-  if (!matches.length) return;
-  const tabs = await chrome.tabs.query({ url: matches });
-  await Promise.allSettled(tabs.filter(tab => tab.id !== undefined).map(tab => syncTab(tab.id!)));
+  const tabs = (await chrome.tabs.query({})).filter(tab => tab.id !== undefined && plugins.some(plugin => matchesSite(plugin, tab.url ?? '')));
+  await Promise.allSettled(tabs.map(tab => syncTab(tab.id!)));
 }
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
