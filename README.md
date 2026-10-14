@@ -1,30 +1,35 @@
-# WebMCP Dev: Add WebMCP to websites, starting with Reddit
+# WebMCP Dev: let agents build reusable WebMCP tools for any website
 
 [![CI](https://github.com/nickroci/webmcp-dev/actions/workflows/ci.yml/badge.svg)](https://github.com/nickroci/webmcp-dev/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**A Chrome extension that adds WebMCP to websites that don't natively support it.**
+**Share a browser tab with your agent, and it writes the WebMCP tools that site is missing, installs them live, and keeps them for next time.**
 
-WebMCP Dev injects tools through site plugins. The included Reddit plugin lets agents browse subreddits, list and read posts, publish posts, and reply to posts or comments using your existing signed-in tab. A LinkedIn plugin reads your feed, searches posts, people (optionally only your own connections) and jobs, and reads posts, jobs and a single open profile in the same way. Add plugins to support other websites through the same extension, or share a tab on any site and let a connected agent write, install and iterate on a plugin for it, with no rebuild or reload.
+Most websites don't offer WebMCP, so agents fall back to screenshots, DOM dumps and clicking through pages one step at a time, and they work it all out again in every session. WebMCP Dev turns that one-off effort into an asset. With your permission, a connected agent such as Claude Code or Codex probes the page you share and writes a small site plugin. That plugin gives the site typed tools, such as `list_expenses`, `read_job` or `send_reply`. The agent installs the plugin into your running Chrome without a rebuild or reload, tests it on the open page, and fixes it in place.
 
-A bundled local MCP server connects agents such as Codex and Claude Code to the tabs you choose to share. Navigation tools change the visible page, so you and your agent can work in the same browser tab.
+- **Efficient.** A single typed call with a structured JSON result replaces a long run of page reads and clicks. That means fewer steps and fewer tokens, and the agent no longer has to guess what is on the screen.
+- **Reusable.** Plugins persist under `~/.webmcp-dev/plugins`. Any later session, from any MCP client, finds them with `webmcp_list_plugins`, so one agent's work is the next agent's starting point, and agents improve each other's plugins.
+- **Yours.** Tools run in your own signed-in tab, alongside you, where you can watch. Nothing goes through a hosted service. You can [export plugins as a zip](#sharing-plugins-with-people-you-trust) and share them with people you trust.
+
+Built-in plugins for Reddit (browse, read, post and reply) and LinkedIn (feed, posts, people, jobs and profiles) show what a finished plugin looks like. The same extension also lets you run any page's tools by hand from its popup.
 
 ![WebMCP Dev extension open on r/webdev in Chrome, showing the Reddit List posts tool and its input form.](docs/images/webmcp-reddit.png)
 
-*WebMCP for Reddit: the extension exposes site tools directly in your existing browser tab.*
+*The popup on Reddit: each plugin's tools, built-in or agent-made, appear with generated input forms.*
 
-## Why use this?
+## How it works
 
-AI agents can already control websites, but navigating pages, finding buttons, and filling out forms can be slow and clunky. WebMCP helps by giving agents structured tools for the tasks a website supports.
+1. **[Install the extension](#install-in-chrome)** and **[register the local MCP server](#connect-codex-or-claude-code-locally)** with your agent.
+2. **Share a tab.** Your agent asks for access, and you approve it in the extension. The tab is now visible to that agent only.
+3. **Let it build.** Turn on **Let agents develop plugins**. On a site with no tools, the agent probes the page with `webmcp_evaluate`, writes a plugin and calls `webmcp_install_plugin`. The new tools appear in the open tab straight away. See [Agent-built plugins](#agent-built-plugins).
+4. **Reuse.** Next time, on that site, the tools are already there, for you in the popup and for every connected agent.
 
-Many popular sites don't expose WebMCP yet. WebMCP Dev lets you add that functionality through site plugins, making agent interactions smoother and faster without waiting for each website to adopt it. Reddit support is included, and you can create plugins for other sites.
-
-Each plugin owns its tools and schemas. There is no central list of allowed tool types, site-specific popup, or switch statement to extend. The popup discovers tools at runtime and builds their input controls.
+Each plugin owns its tools and schemas. There is no central list of tool types or site-specific UI to extend: the popup and the MCP server discover tools at runtime.
 
 **Setup is two parts.** [Install the Chrome extension](#install-in-chrome) for the tool popup, then [connect your local agent](#connect-codex-or-claude-code-locally) so Codex or Claude Code can drive the same tools. The extension is useful without the second part. Agents are not: they see no WebMCP tools until the MCP server is registered.
 
 ## Install in Chrome
 
-Requires Node 22+ and Chrome/Chromium 120+. From the project directory, build the extension (skip this if `dist/extension` is already built):
+Requires Node 22+ and Chrome/Chromium 135+. From the project directory, build the extension (skip this if `dist/extension` is already built):
 
 ```sh
 git clone https://github.com/nickroci/webmcp-dev.git
@@ -33,7 +38,7 @@ npm ci
 npm run build
 ```
 
-1. In the **Chrome profile you use for Reddit**, open `chrome://extensions`.
+1. In the **Chrome profile you browse with**, open `chrome://extensions`.
 2. Enable **Developer mode** in the top-right corner.
 3. Click **Load unpacked** and select this project's **`dist/extension`** folder. Run `pwd` in the project directory to find its full path. On macOS, press **⌘⇧G** in the folder picker to paste a path.
 
