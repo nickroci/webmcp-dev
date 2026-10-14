@@ -47,6 +47,8 @@ export class PluginStore {
   }
   list(): InstalledPlugin[] { return [...this.entries.values()].map(entry => entry.plugin); }
   bundles(): PluginBundle[] { return [...this.entries.values()].map(entry => ({ ...entry.plugin, code: entry.code })); }
+  /** Installed plugins with their source files, for exporting. */
+  sources(): Array<InstalledPlugin & { files: Record<string, string> }> { return [...this.entries.values()].map(entry => ({ ...entry.plugin, files: entry.files })); }
   get(id: string): PluginBundle | undefined { const entry = this.entries.get(id); return entry && { ...entry.plugin, code: entry.code }; }
   async read(id: string): Promise<{ plugin: PluginCatalogEntry; path: string; files: Record<string, string> } | undefined> {
     const entry = this.entries.get(id);

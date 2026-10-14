@@ -12,6 +12,7 @@ function equalToken(actual: unknown, expected: string) {
 }
 const send = (socket: WebSocket, data: unknown) => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data)); };
 const installInput = z.object({ files: z.unknown(), installedBy: z.string().min(1).max(80), note: z.string().max(500).optional() });
+const importInput = z.object({ files: z.unknown(), source: z.string().trim().min(1).max(60) });
 const idInput = z.object({ id: z.string().regex(/^[a-z][a-z0-9-]*$/).max(64) });
 const browserReply = z.object({ ok: z.boolean(), error: z.string().optional(), tabs: z.array(activationSchema).optional() });
 
@@ -126,6 +127,17 @@ export async function startRelay(config: BridgeConfig, options: { pairingTimeout
           else if (message.type === 'reply' && typeof message.id === 'string' && asks.get(message.id)?.browser === ws) {
             const asked = asks.get(message.id)!; asks.delete(message.id); clearTimeout(asked.timer); asked.resolve(message.result);
           } else if (message.type === 'plugin-removed' && typeof message.pluginId === 'string') void removePlugin(message.pluginId, ws);
+          else if (message.type === 'request' && typeof message.id === 'string' && message.id.length <= 128) {
+            // The person at the browser exports and imports plugins from the extension's own page.
+            const respond = (result: unknown) => send(ws, { type: 'response', id: message.id, result });
+            if (!store) respond(bridgeError('UNSUPPORTED', 'This local bridge has no plugin store. Rebuild and restart it with npm run mcp:stop.'));
+            else if (message.method === 'plugins:sources') respond({ ok: true, data: { dir: store.dir, plugins: store.sources() } });
+            else if (message.method === 'plugins:import') {
+              const parsed = importInput.safeParse(message.params);
+              if (!parsed.success) respond(bridgeError('INVALID_INPUT', 'Invalid plugin import request.'));
+              else void installPlugin({ files: parsed.data.files, installedBy: `Imported from ${parsed.data.source}` }).then(respond, error => respond(pluginError(error)));
+            } else respond(bridgeError('UNKNOWN_METHOD', 'Unsupported bridge method.'));
+          }
           return;
         }
         if (message.type === 'cancel' && typeof message.id === 'string') {

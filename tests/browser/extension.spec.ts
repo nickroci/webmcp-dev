@@ -440,6 +440,36 @@ test('an actual stdio MCP client requests approval in the extension, navigates v
     await expect(popup.locator('#plugins')).toContainText('Installed by browser-test-agent');
     await expect(popup.locator('#plugins')).toContainText('second cut');
     await popup.screenshot({ path: 'test-results/agent-plugin.png', fullPage: true });
+    // A person exports what the agent built, and imports it again after reading its code.
+    const manager = await context.newPage();
+    await manager.goto(`chrome-extension://${extensionId}/plugins.html`);
+    await expect(manager.locator('#installed')).toContainText('Unsupported Site · 0.1.0');
+    await manager.getByRole('checkbox', { name: 'Export Unsupported Site' }).check();
+    const downloading = manager.waitForEvent('download');
+    await manager.getByRole('button', { name: 'Export 1 plugin', exact: true }).click();
+    const download = await downloading;
+    expect(download.suggestedFilename()).toBe('unsupported-0.1.0.zip');
+    const archive = join(stateDir, 'unsupported-0.1.0.zip'); await download.saveAs(archive);
+    expect((await call('webmcp_remove_plugin', { id: 'unsupported' })).data).toEqual({ removed: true });
+    await page.waitForFunction(() => window.webMCPDev?.listTools().length === 0);
+    await manager.reload();
+    await expect(manager.locator('#installed')).toContainText('No agent-built plugins yet');
+    await manager.locator('#archive').setInputFiles(archive);
+    await expect(manager.locator('#review')).toContainText('New plugin.');
+    await expect(manager.locator('#review')).toContainText('https://unsupported.test/*');
+    await manager.getByText(/^index\.ts/).click();
+    await expect(manager.locator('#review pre').nth(1)).toContainText('revision: "v2"');
+    await manager.screenshot({ path: 'test-results/import-review.png', fullPage: true });
+    await manager.getByRole('button', { name: 'Install 1 plugin', exact: true }).click();
+    await expect(manager.locator('#review .result')).toHaveText('Installed and active in 1 open tab.');
+    await expect(manager.locator('#installed')).toContainText('installed by Imported from unsupported-0.1.0.zip');
+    await expect.poll(async () => (await call('webmcp_call_tool', { tool: 'unsupported_heading', input: {} })).data?.revision).toBe('v2');
+    // Choosing the same file again recognises the copy already installed.
+    await manager.locator('#archive').setInputFiles([]);
+    await manager.locator('#archive').setInputFiles(archive);
+    await expect(manager.locator('#review')).toContainText('Identical to the copy you already have.');
+    await expect(manager.getByRole('checkbox', { name: 'Install Unsupported Site' })).not.toBeChecked();
+    await manager.close(); await page.bringToFront();
     // A fresh page load activates the plugin through Chrome's registered user script, without the extension worker.
     await page.goto('https://unsupported.test/other');
     await page.waitForFunction(() => window.webMCPDev?.listTools().length === 1);

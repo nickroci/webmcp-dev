@@ -49,7 +49,7 @@ For a client that uses JSON MCP configuration:
 
 Replace the path if your checkout is elsewhere. Keep this checkout and its `node_modules` directory available; this is a developer package, not a standalone binary. Do not configure `npm run mcp` as the stdio command: npm's banner can pollute the MCP protocol stream. Call `node dist/mcp/cli.js` directly.
 
-No terminal needs to stay open. A new MCP adapter starts the relay automatically if needed. Concurrent agents reuse it, while tab selection remains separate for each agent session. A machine restart stops it; a subsequent MCP connection starts it again. `npm run mcp:stop` stops the relay explicitly.
+No terminal needs to stay open. A new MCP adapter starts the relay automatically if needed. Concurrent agents reuse it, while tab selection remains separate for each agent session. If the relay stops, whether from `npm run mcp:stop`, a crash or a machine restart, open MCP sessions reconnect with backoff and start a new relay from the current build. With no session open, the next MCP connection or `npm run mcp:pair` starts it.
 
 ## Agent workflow
 
@@ -120,4 +120,4 @@ Legacy manual pairing remains available under **Advanced connection settings →
 | Port already occupied or incompatible relay | Check `bridge.log`. Stop the old bridge before upgrading, or choose another state directory and port. |
 | Posting rejected | Read the [Reddit submission limitations](../src/plugins/reddit/README.md#submission-behavior-and-limits). |
 
-After rebuilding bridge code, run `npm run mcp:stop` and reconnect your MCP client so the background process loads the new build. Reload the extension and refresh the site for extension/plugin changes.
+After rebuilding bridge code, run `npm run mcp:stop`; open MCP sessions start a relay on the new build. An MCP adapter process itself keeps the code it started with, so reconnect your MCP client after changing the adapter or its tools. Reload the extension and refresh the site for extension/plugin changes.

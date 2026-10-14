@@ -83,7 +83,7 @@ When the agent requests access with `webmcp_request_connection`, open **WebMCP D
 
 `webmcp_doctor` diagnoses the connection: per shared tab it reports the running plugin version against the installed one, the selected tab, document ID and tool count, and a remedy for each problem it finds. The agent calls `webmcp_list_tabs`, then `webmcp_select_tab` with the returned tab key, then discovers the selected page's tools. `webmcp_refresh_tools` refreshes the selected page's metadata. Clients that cache their tool list can use the always-available `webmcp_call_tool` fallback with the discovered name and input. Site tools retain their names, such as `reddit_browse_subreddit`, `reddit_list_posts`, and `reddit_read_post`.
 
-**You do not need to keep a terminal running.** The MCP client starts a local background relay automatically; multiple MCP sessions reuse it. Each agent chooses its own shared tab. Use `npm run mcp:stop` to stop the relay; starting a new MCP connection starts it again. Disconnect in the popup to remove pairing and revoke all shared tabs for that Chrome profile.
+**You do not need to keep a terminal running.** The MCP client starts a local background relay automatically; multiple MCP sessions reuse it. Each agent chooses its own shared tab. Use `npm run mcp:stop` to restart the relay on a new build: open MCP sessions reconnect within seconds and start a fresh one. When no session is open, `npm run mcp:pair` starts it. Disconnect in the popup to remove pairing and revoke all shared tabs for that Chrome profile.
 
 This uses the Chrome instance already open on this computer. No Firecrawl, hosted browser, remote debugging port, or browser launch flag is required. The MCP client and Chrome must run on the same machine. Native WebMCP is optional for this connection.
 
@@ -117,6 +117,12 @@ Share a tab on a site that has no plugin, and a connected agent can build one wh
 Any later agent session, from any client, finds these plugins with `webmcp_list_plugins` and reads their source with `webmcp_read_plugin`, so one agent can improve what another started. Several agents can be connected at the same time, each with its own selected tab; see [sharing and execution](docs/local-mcp.md#sharing-and-execution) for how concurrent calls and installs behave. A finished plugin folder can be copied from `~/.webmcp-dev/plugins/<id>` into `src/plugins` unchanged and shipped with the extension.
 
 This mode gives connected agents code execution in the tabs you share, under your signed-in sessions, and installed plugins keep running on their matching sites until removed. Treat it like developer mode: turn it on while you are working with an agent you trust, and read what it installs.
+
+### Sharing plugins with people you trust
+
+![The WebMCP Dev export page listing agent-built plugins with checkboxes, Revolut Business selected and an Export 1 plugin button, above the Import section and its trust warning.](docs/images/export-plugins.png)
+
+Site plugins → **Export or import plugins** opens a page that lists the plugins agents built for you. Select one or more and export them as a single `.zip` with one source folder per plugin. There is no online catalog on purpose: a plugin runs with your signed-in session on every site it matches, so send exports only to people who trust you, and import only from people you trust completely. Before installing, the import page shows each plugin's sites, whether it replaces one you have, and every file's code. Imported plugins install the same way agent-built ones do, so “Let agents develop plugins” and Chrome's Allow User Scripts must be on, and the local bridge must be running.
 
 ## WebMCP for Reddit
 

@@ -232,6 +232,7 @@ $('#pair-form').addEventListener('submit', event => {
 $('#port-form').addEventListener('submit', event => { event.preventDefault(); void runAgentAction('agent:port', { port: Number($<HTMLInputElement>('#bridge-port').value) }); });
 $('#share-tab').addEventListener('click', () => { void runAgentAction(sharing ? 'agent:unshare' : 'agent:share'); });
 $('#dev-mode').addEventListener('change', () => { void runAgentAction('agent:devmode', { enabled: $<HTMLInputElement>('#dev-mode').checked }); });
+$('#manage-plugins').addEventListener('click', () => { void chrome.tabs.create({ url: chrome.runtime.getURL('plugins.html') }); });
 $('#open-extension-settings').addEventListener('click', () => { void chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` }); });
 $('#disconnect-agent').addEventListener('click', () => { void runAgentAction('agent:disconnect'); });
 setInterval(() => { if (!agentBusy && !$('#agents-view').hidden) void agentAction().catch(agentError); }, 1000);

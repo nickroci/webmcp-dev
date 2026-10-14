@@ -25,3 +25,10 @@ footer { display: flex; justify-content: space-between; padding: 14px 20px; colo
 .toggle { flex-direction: row; align-items: center; gap: 10px; margin: 18px 0 4px; font-size: 13px; } .toggle input { width: auto; accent-color: #5145cd; }
 .warning { color: #925318; } .installed-by { font-size: 11px; color: #747682; margin-top: 8px; } .plugin button { margin-top: 8px; }
 @media (prefers-color-scheme: dark) { .warning { color: #ffce9a; } }
+
+/* The export and import page opens in a tab, so it can show file pickers and whole plugin sources. */
+body.page { width: auto; max-width: 760px; margin: 0 auto; } .page main { padding-bottom: 32px; } .page section { margin-bottom: 28px; }
+.page .import { border-top: 1px solid #e0e1e7; padding-top: 18px; } .page #archive { margin-top: 4px; } .page #export, .page #import { margin-top: 14px; }
+.toggle.compact { margin: 0; font-size: 12px; } .review details { margin: 6px 0; } .review .runs-on { margin-top: 8px; font-weight: 600; } .review .result { font-weight: 600; }
+#manage-plugins { margin-top: 8px; }
+@media (prefers-color-scheme: dark) { .page .import { border-color: #393a46; } }

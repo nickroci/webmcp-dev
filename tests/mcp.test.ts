@@ -8,12 +8,12 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { bridgeConfig, MANAGEMENT_TOOLS } from './bridge-fixtures';
 import { startRelay } from '../src/mcp/relay';
-import { RelayClient } from '../src/mcp/client';
+import { RelayClient, RelayConnection } from '../src/mcp/client';
 import { createMcpServer } from '../src/mcp/server';
 import type { BridgeConfig } from '../src/mcp/config';
 import type { RemoteTab, SharedTab } from '../src/mcp/protocol';
 import { PluginStore } from '../src/mcp/plugins';
-import { demoFiles } from './plugin-fixtures';
+import { demoFiles, demoManifest } from './plugin-fixtures';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -225,4 +225,81 @@ test('agents install, read, evaluate against and remove plugins through the rela
     assert.ok(received.some(message => message.type === 'remove' && message.pluginId === 'demo-site'));
     assert.equal((await call('webmcp_remove_plugin', { id: 'reddit' })).error?.code, 'UNKNOWN_PLUGIN');
   } finally { await client.close(); await server.close(); connection.close(); chrome.close(); await relay.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('the browser exports plugin sources and imports archived plugins through the relay, gated by dev mode', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'webmcp-mcp-plugins-'));
+  const store = new PluginStore(join(dir, 'plugins')); await store.load();
+  await store.install(demoFiles('hi'), { installedBy: 'builder-agent', note: 'first cut' });
+  const config = await bridgeConfig(); const relay = await startRelay(config, { store });
+  const chrome = await browser(config);
+  const pushed: any[] = []; const responses = new Map<string, any>();
+  chrome.on('message', raw => {
+    const message = JSON.parse(raw.toString());
+    if (message.type === 'install') { pushed.push(message.plugin); chrome.send(JSON.stringify({ type: 'reply', id: message.id, result: { ok: true, tabs: [] } })); }
+    if (message.type === 'response') responses.set(message.id, message.result);
+  });
+  const request = async (method: string, params?: unknown) => {
+    const id = randomUUID();
+    chrome.send(JSON.stringify({ type: 'request', id, method, params }));
+    for (let attempt = 0; attempt < 200 && !responses.has(id); attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+    return responses.get(id);
+  };
+  const capabilities = (devMode: boolean) => chrome.send(JSON.stringify({ type: 'snapshot', tabs: [], capabilities: { devMode, userScripts: true, extensionVersion: '0.6.0' } }));
+  const incoming = { ...demoFiles('bonjour'), 'plugin.json': JSON.stringify({ ...demoManifest, id: 'shared-site', name: 'Shared Site' }) };
+  try {
+    const sources = await request('plugins:sources');
+    assert.equal(sources.ok, true);
+    assert.deepEqual(sources.data.plugins.map((plugin: { id: string }) => plugin.id), ['demo-site']);
+    assert.deepEqual(sources.data.plugins[0].files, demoFiles('hi'));
+    assert.equal(sources.data.plugins[0].installedBy, 'builder-agent');
+
+    capabilities(false); await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal((await request('plugins:import', { files: incoming, source: 'friend.zip' })).error.code, 'DEV_MODE_DISABLED');
+    assert.equal(store.get('shared-site'), undefined);
+
+    capabilities(true); await new Promise(resolve => setTimeout(resolve, 20));
+    const imported = await request('plugins:import', { files: incoming, source: 'friend.zip' });
+    assert.equal(imported.ok, true, JSON.stringify(imported));
+    assert.equal(imported.data.plugin.installedBy, 'Imported from friend.zip');
+    assert.equal(pushed.at(-1).id, 'shared-site');
+    assert.match(pushed.at(-1).code, /BONJOUR|bonjour/);
+    assert.deepEqual(await readdir(join(dir, 'plugins')), ['demo-site', 'shared-site']);
+    // Built-in ids stay reserved, whoever asks.
+    const reserved = await request('plugins:import', { files: { ...incoming, 'plugin.json': JSON.stringify({ ...demoManifest, id: 'reddit' }) }, source: 'friend.zip' });
+    assert.equal(reserved.error.code, 'PLUGIN_ID_TAKEN');
+    assert.equal((await request('plugins:import', { files: incoming })).error.code, 'INVALID_INPUT');
+    assert.equal((await request('plugins:nope')).error.code, 'UNKNOWN_METHOD');
+  } finally { chrome.close(); await relay.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('an agent session survives the relay stopping, and starts a new one when none answers', async () => {
+  const config = await bridgeConfig();
+  let relay = await startRelay(config);
+  let started = 0;
+  // What the CLI does: connect, or start a relay on the current build when none is listening.
+  const connect = async () => {
+    try { return await RelayClient.connect(config); }
+    catch { relay = await startRelay(config); started++; return RelayClient.connect(config); }
+  };
+  const connection = await RelayConnection.open(connect, { maxDelayMs: 200 });
+  let disconnects = 0; let changes = 0;
+  connection.onDisconnected = () => { disconnects++; };
+  connection.onChanged = () => { changes++; };
+  try {
+    assert.equal((await connection.request('tabs')).ok, true);
+    await relay.close();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(disconnects, 1);
+    for (let attempt = 0; attempt < 100 && started === 0; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(started, 1);
+    assert.deepEqual(await connection.request('tabs'), { ok: true, data: [] });
+    assert.ok(changes >= 1, 'the session rediscovers tabs after reconnecting');
+    // A browser that reconnects to the new relay is visible to the same session.
+    const chrome = await browser(config);
+    chrome.send(JSON.stringify({ type: 'snapshot', tabs: [sample] }));
+    for (let attempt = 0; attempt < 100 && (await connection.request('tabs') as any).data.length === 0; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(((await connection.request('tabs')) as any).data[0].documentId, 'document-one');
+    chrome.close();
+  } finally { connection.close(); await relay.close(); }
 });

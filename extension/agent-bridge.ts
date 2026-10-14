@@ -24,6 +24,7 @@ export function startAgentBridge(catalog: () => Promise<PluginCatalogEntry[]>, s
   let connecting = false;
   let reconnect: ReturnType<typeof setTimeout> | undefined;
   const running = new Map<string, PageCall>();
+  const requests = new Map<string, { resolve(result: BridgeResult): void; timer: ReturnType<typeof setTimeout> }>();
   const healed = new Set<string>();
   const discovery = createDiscovery();
   const ready = chrome.storage.session.get('sharedTabs').then(value => { shared = z.record(z.string(), z.string()).catch({}).parse(value.sharedTabs); });
@@ -169,6 +170,16 @@ export function startAgentBridge(catalog: () => Promise<PluginCatalogEntry[]>, s
       return result;
     } finally { running.delete(id); }
   }
+  /** Ask the relay for something on the person's behalf, such as the plugin sources to export. */
+  function relayRequest(method: string, params?: unknown): Promise<BridgeResult> {
+    if (!connected) return Promise.resolve(bridgeError('NOT_CONNECTED', 'WebMCP Dev is not connected to the local bridge. Open agent sessions restart it within seconds; if none is open, run npm run mcp:pair in your WebMCP Dev checkout, then try again.'));
+    const id = crypto.randomUUID();
+    return new Promise(resolve => {
+      const timer = setTimeout(() => { requests.delete(id); resolve(bridgeError('TIMEOUT', 'The local bridge did not answer. If it is older than this extension, run npm run mcp:stop so it restarts on the current build.')); }, 60_000);
+      requests.set(id, { resolve, timer });
+      send({ type: 'request', id, method, params });
+    });
+  }
   /** Open web tabs the plugin's own matcher accepts; the same matcher decides injection in the page. */
   const matchingTabs = async (plugin: { matches: string[] }) => {
     const tabs = await chrome.tabs.query({});
@@ -257,12 +268,17 @@ export function startAgentBridge(catalog: () => Promise<PluginCatalogEntry[]>, s
             error => { if (socket === ws) send({ type: 'reply', id: message.id, result: { ok: false, error: error instanceof Error ? error.message : String(error) } }); },
           );
         } else if (message.type === 'remove' && typeof message.pluginId === 'string') void remove(message.pluginId, false).catch(console.warn);
+        else if (message.type === 'response' && typeof message.id === 'string') {
+          const request = requests.get(message.id); if (!request) return;
+          requests.delete(message.id); clearTimeout(request.timer); request.resolve(message.result);
+        }
       };
       ws.onclose = event => {
         if (socket !== ws) return;
         socket = undefined; connected = false; snapshot = []; snapshotSignature = '';
         status = event.code === 1008 ? 'Pairing rejected. Generate a new pairing code.' : 'Waiting for the local bridge…';
         for (const id of running.keys()) void cancel(id);
+        for (const [id, request] of requests) { requests.delete(id); clearTimeout(request.timer); request.resolve(bridgeError('DISCONNECTED', 'The local bridge disconnected. Check the plugin list before importing again.')); }
         if (event.code !== 1008) reconnect = setTimeout(() => { void connect(); }, 3000);
       };
     } finally { connecting = false; }
@@ -283,6 +299,9 @@ export function startAgentBridge(catalog: () => Promise<PluginCatalogEntry[]>, s
     if (!message?.type?.startsWith('agent:') || !sender.url?.startsWith(chrome.runtime.getURL(''))) return;
     void (async () => {
       await ready;
+      // The plugins page exports and imports through the relay, which holds the plugin sources.
+      if (message.type === 'agent:plugin-sources') return relayRequest('plugins:sources');
+      if (message.type === 'agent:import-plugin') return relayRequest('plugins:import', { files: message.files, source: message.source });
       if (message.type === 'agent:approve') {
         const tab = await chrome.tabs.get(message.tabId);
         if (!isWebPage(tab.url)) throw new Error('Open the website you want to share, then approve from its extension popup.');

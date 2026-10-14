@@ -1,7 +1,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { RelayClient } from './client';
+import type { RelayRequester } from './client';
 import { bridgeError, MAX_EVALUATE_CODE, type BridgeResult, type BrowserCapabilities, type RemoteTab } from './protocol';
 
 const noInput = z.strictObject({});
@@ -62,7 +62,7 @@ function pageTools(tab?: RemoteTab): Tool[] {
 const DEV_MODE_REMEDY = 'Ask the user to open WebMCP Dev → Agents and enable "Let agents develop plugins". It allows webmcp_install_plugin and webmcp_evaluate.';
 const USER_SCRIPTS_REMEDY = 'Ask the user to open chrome://extensions, choose Details on WebMCP Dev, and turn on Allow User Scripts. It takes effect at once. Agent-installed plugins and webmcp_evaluate need it.';
 
-export function createMcpServer(relay: RelayClient) {
+export function createMcpServer(relay: RelayRequester) {
   const server = new Server({ name: 'webmcp-dev', version: '0.6.0' }, { capabilities: { tools: { listChanged: true } }, instructions:
     'Work in the user’s shared Chrome tab. Call webmcp_list_tabs; if no tab is shared, call webmcp_request_connection and ask the user to approve in the extension. Do not approve on their behalf. Then call webmcp_select_tab and rediscover tools. If the client cannot discover newly listed tools, use webmcp_call_tool with a discovered name and its original page input. If an expected tool is missing or a page tool behaves like an older build, call webmcp_doctor before concluding anything. '
     + 'A shared tab on a site with no tools is an invitation to build them: call webmcp_list_plugins first, since another agent may already have a plugin for that site; read it with webmcp_read_plugin; probe the page with webmcp_evaluate; then write or improve the plugin and call webmcp_install_plugin. Installation compiles, persists under ~/.webmcp-dev/plugins, and updates the open tab in place, so test, fix and reinstall without asking the user to reload anything. Leave a note describing the revision. '

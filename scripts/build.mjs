@@ -45,10 +45,10 @@ await build({ ...options, entryPoints: ['src/inject.ts'], outfile: join(out, 're
 for (let i = 0; i < catalog.length; i++) {
   await build({ ...options, stdin: { contents: bootstrap(resolve('src/core/runtime.ts'), entries[i], catalog[i]), resolveDir: resolve('.'), loader: 'ts' }, outfile: join(out, 'extension', catalog[i].file), format: 'iife' });
 }
-for (const name of ['popup', 'background', 'loader']) {
+for (const name of ['popup', 'plugins', 'background', 'loader']) {
   await build({ ...options, entryPoints: [`extension/${name}.ts`], outfile: join(out, `extension/${name}.js`), format: name === 'background' ? 'esm' : 'iife' });
 }
-for (const file of ['popup.html', 'popup.css']) await cp(`extension/${file}`, join(out, 'extension', file));
+for (const file of ['popup.html', 'plugins.html', 'popup.css']) await cp(`extension/${file}`, join(out, 'extension', file));
 const base = JSON.parse(await readFile('extension/manifest.json', 'utf8'));
 const matches = [...new Set(catalog.flatMap(plugin => plugin.matches))];
 // Agent-installed plugins can target any site, so the base manifest asks for all hosts; built-in matches still drive the loader.

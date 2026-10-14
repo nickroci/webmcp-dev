@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { readConfig, pairingCode, stateDirectory, type BridgeConfig } from './config';
-import { RelayClient } from './client';
+import { RelayClient, RelayConnection } from './client';
 import { PluginStore } from './plugins';
 import { startRelay } from './relay';
 import { createMcpServer } from './server';
@@ -43,13 +43,15 @@ async function main() {
     const relay = await RelayClient.connect(config);
     await relay.request('shutdown'); relay.close(); console.log('Local bridge stopped.'); return;
   }
-  const relay = await ensureRelay(config);
   if (command === 'pair') {
+    const relay = await ensureRelay(config);
     console.log('Paste this pairing code into WebMCP Dev → Agents → Connect:\n');
     console.log(pairingCode(config));
     console.log('\nThen click Share this tab on the website you want the agent to use.');
     relay.close(); return;
   }
+  // Each attempt starts the relay if none is listening, so a stopped relay comes back on the current build.
+  const relay = await RelayConnection.open(() => ensureRelay(config));
   const server = createMcpServer(relay);
   const transport = new StdioServerTransport();
   await server.connect(transport);

@@ -12,7 +12,7 @@ npm run check
 
 Requires Node 22+ and Chrome/Chromium 120+. Browser tests create temporary Chromium profiles and use fixtures for website requests. Do not use real accounts or publish real posts in tests.
 
-After changing extension or plugin code, run `npm run build`, reload the unpacked extension, and refresh the website. After changing bridge code, stop the local relay with `npm run mcp:stop` and reconnect the MCP client.
+After changing extension or plugin code, run `npm run build`, reload the unpacked extension, and refresh the website. After changing relay code, run `npm run mcp:stop`; open MCP sessions restart it on the new build. After changing the MCP adapter or its tools, also reconnect the MCP client.
 
 ## Pull requests
 

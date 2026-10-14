@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>WebMCP Dev plugins</title><link rel="stylesheet" href="popup.css"></head>
+<body class="page">
+  <header><span class="mark">W</span><div><h1>Export or import plugins</h1><p>Plugins agents built for you, as source code you can share.</p></div><span class="version">0.6.0</span></header>
+  <main>
+    <p id="status" role="status">Loading plugins…</p>
+    <section aria-labelledby="export-heading">
+      <div class="input-heading"><h2 id="export-heading">Your plugins</h2><label class="toggle compact"><input id="select-all" type="checkbox"><span>Select all</span></label></div>
+      <p class="hint">Exports contain each plugin’s source code, so whoever receives them can read it before installing. Built-in plugins ship with the extension and are not listed.</p>
+      <div id="installed"></div>
+      <button type="button" id="export" disabled>Export selected</button>
+    </section>
+    <section aria-labelledby="import-heading" class="import">
+      <h2 id="import-heading">Import</h2>
+      <p class="hint warning">A plugin runs its code on every site it matches, with your signed-in session there. Only import a file from someone you trust completely, and read its code before installing. Importing replaces an installed plugin with the same id.</p>
+      <label>Plugin export (.zip)<input id="archive" type="file" accept=".zip,application/zip"></label>
+      <div id="review"></div>
+      <button type="button" id="import" hidden disabled>Install selected</button>
+    </section>
+  </main>
+  <script src="plugins.js"></script>
+</body>
+</html>
